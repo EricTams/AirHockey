@@ -78,4 +78,27 @@ export class Renderer {
   }
 
   get integerScale(): number { return this.scale }
+
+  /**
+   * Map a client-space point into the virtual framebuffer, accounting for the
+   * integer upscale and the letterbox. Returns undefined outside the image.
+   */
+  clientToVirtual(clientX: number, clientY: number): { x: number; y: number } | undefined {
+    const rect = this.gl.domElement.getBoundingClientRect()
+    const dw = VIRTUAL_W * this.scale
+    const dh = VIRTUAL_H * this.scale
+    const ox = Math.floor((rect.width - dw) / 2)
+    const oy = Math.floor((rect.height - dh) / 2)
+    const x = (clientX - rect.left - ox) / this.scale
+    const y = (clientY - rect.top - oy) / this.scale
+    if (x < 0 || y < 0 || x > VIRTUAL_W || y > VIRTUAL_H) return undefined
+    return { x, y }
+  }
+
+  /** Same point as normalised device coordinates, for raycasting. */
+  clientToNdc(clientX: number, clientY: number): THREE.Vector2 | undefined {
+    const v = this.clientToVirtual(clientX, clientY)
+    if (!v) return undefined
+    return new THREE.Vector2((v.x / VIRTUAL_W) * 2 - 1, 1 - (v.y / VIRTUAL_H) * 2)
+  }
 }

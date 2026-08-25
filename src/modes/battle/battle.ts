@@ -13,9 +13,15 @@ import { makePlaceholderTexture } from '../../world/placeholder'
 import { findMissing } from '../../world/missingArt'
 import { loadAseprite } from '../../world/aseprite'
 
-type Phase = 'countdown' | 'play' | 'scored' | 'over'
+type Phase = 'ready' | 'countdown' | 'play' | 'scored' | 'over'
 
 const COUNTDOWN_TICKS = 30   // doc §8.3
+/**
+ * Ticks the ready prompt ignores input. Without it a player mashing through the
+ * dialogue carries a press into the battle and starts the match instantly,
+ * never seeing the prompt at all.
+ */
+const READY_LOCK_TICKS = 20
 const SCORED_TICKS = 45
 /**
  * Camera elevation. Steeper than doc §4.3's 35 degrees: the table is framed to
@@ -71,6 +77,9 @@ export class BattleMode implements Mode {
   private edge = { leftTop: 320, leftBottom: 320, rightTop: 640, rightBottom: 640 }
   /** Everything built for the current layout, freed when the battle is left. */
   private disposables: (THREE.BufferGeometry | THREE.Material | THREE.Texture)[] = []
+  private raycaster = new THREE.Raycaster()
+  /** Table surface in sim space, for turning a pointer ray into a paddle target. */
+  private tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 
   constructor(private gfx: Renderer, private input: Input, private assets: Assets) {}
 
@@ -83,8 +92,9 @@ export class BattleMode implements Mode {
     this.returnTo = p.returnTo
     this.sim = new BattleSim(p.config)
     this.score = [0, 0]
-    this.phase = 'countdown'
-    this.timer = COUNTDOWN_TICKS
+    // The match waits on the player: they grab their paddle to begin.
+    this.phase = 'ready'
+    this.timer = READY_LOCK_TICKS
     this.stuck = 0
     void this.build(p)
   }
@@ -340,8 +350,31 @@ export class BattleMode implements Mode {
     }
   }
 
-  /** Player paddle target: nudge from its current spot by held direction. */
+
+  /**
+   * Where the pointer is on the table, in sim coordinates, or undefined if it
+   * is off the image. Casts the pointer ray at the table plane rather than
+   * intersecting meshes, so the target is continuous even off the table edge
+   * and the paddle keeps tracking rather than sticking.
+   */
+  private pointerOnTable(): { x: number; y: number } | undefined {
+    const p = this.input.pointer
+    if (!p) return undefined
+    const ndc = this.gfx.clientToNdc(p.x, p.y)
+    if (!ndc) return undefined
+    this.raycaster.setFromCamera(ndc, this.camera)
+    const hit = new THREE.Vector3()
+    if (!this.raycaster.ray.intersectPlane(this.tablePlane, hit)) return undefined
+    // Scene x is negated relative to sim x, so undo that coming back.
+    return { x: sceneX(hit.x), y: hit.z }
+  }
+
+  /** Player paddle target, from the pointer when it is in use, else the keys. */
   private playerTarget(): { x: number; y: number } {
+    if (this.input.source === 'pointer') {
+      const at = this.pointerOnTable()
+      if (at) return at
+    }
     const speed = this.sim.cfg.paddle.maxSpeed / TICK_HZ
     let dx = 0
     let dy = 0
@@ -356,10 +389,34 @@ export class BattleMode implements Mode {
     }
   }
 
+  /** True when the pointer is grabbing the player's paddle. */
+  private pointerOnPaddle(): boolean {
+    const at = this.pointerOnTable()
+    if (!at) return false
+    const grab = this.sim.cfg.paddle.radius * 1.6   // forgiving, it is a small target
+    return Math.hypot(at.x - this.sim.player.x, at.y - this.sim.player.y) <= grab
+  }
+
   update(dt: number): void {
     if (!this.sim) return
 
-    if (this.phase === 'countdown') {
+    if (this.phase === 'ready') {
+      if (this.timer > 0) this.timer--
+      // Clicking the paddle starts the match. Z also works, so the game stays
+      // playable without a pointer.
+      else if ((this.input.pointerPressed && this.pointerOnPaddle()) || this.input.pressed('interact')) {
+        this.phase = 'countdown'
+        this.timer = COUNTDOWN_TICKS
+      }
+      // Highlight the paddle while it is the thing being asked for.
+      if (this.playerMesh) {
+        const mat = this.playerMesh.material as THREE.MeshLambertMaterial
+        mat.color.setHex(this.pointerOnPaddle() ? 0xd6ffe4 : 0x7fd0a0)
+      }
+    } else if (this.phase === 'countdown') {
+      if (this.playerMesh) {
+        (this.playerMesh.material as THREE.MeshLambertMaterial).color.setHex(0x7fd0a0)
+      }
       if (--this.timer <= 0) this.phase = 'play'
     } else if (this.phase === 'play') {
       const result = this.sim.step(dt, this.playerTarget(), opponentTarget(this.sim))
@@ -473,7 +530,11 @@ export class BattleMode implements Mode {
     }
     rt(`FIRST TO ${this.sim.cfg.rules.targetScore}`, top + 140, 0x415a78)
 
-    if (this.phase === 'countdown') {
+    if (this.phase === 'ready') {
+      rt('CLICK YOUR', top + 244, 0xffd76b)
+      rt('PADDLE', top + 264, 0xffd76b, 2)
+      rt('TO START', top + 302, DIM)
+    } else if (this.phase === 'countdown') {
       rt(String(Math.max(1, Math.ceil(this.timer / (COUNTDOWN_TICKS / 3)))), top + 250, 0xffd76b, 3)
     } else if (this.phase === 'scored') {
       rt('GOAL', top + 250, 0xffd76b, 2)

@@ -7,7 +7,12 @@ function harness() {
   const input = new Input(target)
   const down = (code: string) => target.dispatchEvent(Object.assign(new Event('keydown'), { code }))
   const up = (code: string) => target.dispatchEvent(Object.assign(new Event('keyup'), { code }))
-  return { target, input, down, up }
+  const move = (x: number, y: number) =>
+    target.dispatchEvent(Object.assign(new Event('pointermove'), { clientX: x, clientY: y }))
+  const pDown = (x: number, y: number) =>
+    target.dispatchEvent(Object.assign(new Event('pointerdown'), { clientX: x, clientY: y }))
+  const pUp = () => target.dispatchEvent(new Event('pointerup'))
+  return { target, input, down, up, move, pDown, pUp }
 }
 
 describe('Input', () => {
@@ -72,5 +77,47 @@ describe('Input', () => {
     expect(input.held('right')).toBe(true)
     target.dispatchEvent(new Event('blur'))
     expect(input.held('right')).toBe(false)
+  })
+})
+
+describe('Input pointer', () => {
+  it('tracks the pointer position', () => {
+    const { input, move } = harness()
+    expect(input.pointer).toBeUndefined()
+    move(120, 340)
+    expect(input.pointer).toEqual({ x: 120, y: 340 })
+  })
+
+  it('reports pointerPressed only on the rising edge', () => {
+    const { input, pDown, pUp } = harness()
+    pDown(10, 10)
+    expect(input.pointerPressed).toBe(true)
+    expect(input.pointerHeld).toBe(true)
+    input.endTick()
+    expect(input.pointerPressed).toBe(false)   // consumed
+    expect(input.pointerHeld).toBe(true)       // still down
+    pUp()
+    input.endTick()
+    pDown(10, 10)
+    expect(input.pointerPressed).toBe(true)    // fires again on re-press
+  })
+
+  it('switches source between keyboard and pointer', () => {
+    // Both devices stay live; whichever was used last drives the paddle, so a
+    // player can swap mid-match without the other fighting it.
+    const { input, down, move } = harness()
+    expect(input.source).toBe('keyboard')
+    move(5, 5)
+    expect(input.source).toBe('pointer')
+    down('KeyA')
+    expect(input.source).toBe('keyboard')
+  })
+
+  it('releases the pointer button on blur so it cannot stick', () => {
+    const { target, input, pDown } = harness()
+    pDown(1, 1)
+    expect(input.pointerHeld).toBe(true)
+    target.dispatchEvent(new Event('blur'))
+    expect(input.pointerHeld).toBe(false)
   })
 })

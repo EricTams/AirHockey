@@ -35,13 +35,13 @@
   },
   "puck": {
     "radius": 0.12,
-    "maxSpeed": 14.0,
+    "maxSpeed": 7.0,
     "friction": 0.995,
     "restitution": 0.98
   },
   "paddle": {
     "radius": 0.22,
-    "maxSpeed": 9.0
+    "maxSpeed": 4.5
   },
   "rules": {
     "mode": "score",
