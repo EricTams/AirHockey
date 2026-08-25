@@ -17,6 +17,8 @@ const MAP_COLS = 24
 const MAP_ROWS = 18
 /** Pure-grass fill cell in the tileset (cols 4-6 × rows 1-3 are all identical). */
 const GRASS_CELL = { col: 4, row: 1 }
+/** Solid dirt from the cliff face, used only to make the tile grid legible. */
+const DIRT_CELL = { col: 5, row: 6 }
 
 const DIRS: Record<Facing, [number, number]> = {
   up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
@@ -48,8 +50,14 @@ export class OverworldMode implements Mode {
       label: 'TILESET', kind: 'tile', width: 512, height: 464,
     })
     const img = sheet.image as { width?: number; height?: number } | undefined
+    // M1 scaffolding: a checker of two real cells so the tile grid is visible.
+    // Without a depth cue on the ground, a pitch change is invisible — every
+    // billboard is the same on-screen size at any pitch. M3 replaces this with
+    // the real tile layers.
     this.scene.add(buildGroundMesh(
-      sheet, MAP_COLS, MAP_ROWS, GRASS_CELL, TILE, img?.width ?? 512, img?.height ?? 464))
+      sheet, MAP_COLS, MAP_ROWS,
+      (tx, ty) => ((tx + ty) % 2 === 0 ? GRASS_CELL : DIRT_CELL),
+      TILE, img?.width ?? 512, img?.height ?? 464))
 
     const def = (await (await fetch('/data/characters/character-1.json')).json()) as CharacterDef
     this.player = await CharacterSprite.load(def, this.assets)

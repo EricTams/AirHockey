@@ -5,10 +5,12 @@ import * as THREE from 'three'
  * slice of the tile-layer builder needed to stand the overworld on real art.
  * The full ground/overlay/overhead layer builder lands in M3.
  */
+export interface Cell { col: number; row: number }
+
 export function buildGroundMesh(
   texture: THREE.Texture,
   cols: number, rows: number,
-  cell: { col: number; row: number },
+  cellAt: (tx: number, ty: number) => Cell,
   tilePx: number,
   sheetW: number, sheetH: number,
 ): THREE.Mesh {
@@ -18,14 +20,16 @@ export function buildGroundMesh(
 
   // Inset by a fraction of a texel so neighbouring cells never bleed in.
   const eps = 0.01
-  const u0 = (cell.col * tilePx + eps) / sheetW
-  const u1 = ((cell.col + 1) * tilePx - eps) / sheetW
-  const v0 = 1 - ((cell.row + 1) * tilePx - eps) / sheetH
-  const v1 = 1 - (cell.row * tilePx + eps) / sheetH
 
   let q = 0
   for (let ty = 0; ty < rows; ty++) {
     for (let tx = 0; tx < cols; tx++) {
+      const cell = cellAt(tx, ty)
+      const u0 = (cell.col * tilePx + eps) / sheetW
+      const u1 = ((cell.col + 1) * tilePx - eps) / sheetW
+      const v0 = 1 - ((cell.row + 1) * tilePx - eps) / sheetH
+      const v1 = 1 - (cell.row * tilePx + eps) / sheetH
+
       const x0 = tx - 0.5, x1 = tx + 0.5
       const z0 = ty - 0.5, z1 = ty + 0.5
       // Flat in XZ, facing up.
