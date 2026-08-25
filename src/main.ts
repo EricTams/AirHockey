@@ -4,6 +4,7 @@ import { ModeManager } from './core/mode'
 import { Loop } from './core/loop'
 import { DebugOverlay } from './core/debugOverlay'
 import { StubMode } from './modes/stub'
+import { GalleryMode } from './modes/gallery'
 import { VIRTUAL_W, VIRTUAL_H, CAMERA_PITCH_DEG } from './core/config'
 
 const gfx = new Renderer()
@@ -15,7 +16,8 @@ const debug = new DebugOverlay()
 modes.register(new StubMode('overworld', gfx, 0x3a7d44))
 modes.register(new StubMode('dialogue', gfx, 0x2f4b7c))
 modes.register(new StubMode('battle', gfx, 0x8c2f39))
-modes.switchTo('overworld')
+modes.register(new GalleryMode(gfx))
+modes.switchTo('gallery')
 
 const loop = new Loop(
   (dt) => {
