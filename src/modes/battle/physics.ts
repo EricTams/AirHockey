@@ -56,6 +56,8 @@ export interface OpponentConfig {
   sheet?: string
   /** `inert` parks the paddle: some opponents do not contest the puck at all. */
   ai: 'standard' | 'inert'
+  /** Colour multiplier matching the NPC's overworld tint. */
+  tint?: number
   roamDepth?: number
   aggression?: number
 }

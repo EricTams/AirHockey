@@ -63,6 +63,19 @@ export class CharacterSprite {
     return sprite
   }
 
+  /**
+   * Multiply the sprite's colour. All three NPCs share Character 2's sheet, so
+   * a tint is what tells them apart until they have their own art.
+   */
+  setTint(hex: number): void {
+    this.material.color.setHex(hex)
+  }
+
+  /** The sheet for a facing, so callers can reuse its texture and frames. */
+  sheetFor(facing: Facing): SpriteSheet | undefined {
+    return this.sheets.get(facing) ?? this.sheets.values().next().value
+  }
+
   /** Sheets actually present, for reporting which facings fall back. */
   get facingsLoaded(): Facing[] { return [...this.sheets.keys()] }
 

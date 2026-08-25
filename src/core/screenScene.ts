@@ -26,3 +26,46 @@ export function screenRect(x: number, y: number, w: number, h: number, color: nu
   mesh.frustumCulled = false
   return mesh
 }
+
+/** A line segment between two virtual-pixel points, y down. */
+export function screenLine(
+  x0: number, y0: number, x1: number, y1: number, thickness: number, color: number,
+): THREE.Mesh {
+  const wy0 = VIRTUAL_H - y0
+  const wy1 = VIRTUAL_H - y1
+  const dx = x1 - x0
+  const dy = wy1 - wy0
+  const len = Math.hypot(dx, dy)
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(len, thickness),
+    new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }),
+  )
+  mesh.position.set((x0 + x1) / 2, (wy0 + wy1) / 2, 0)
+  mesh.rotation.z = Math.atan2(dy, dx)
+  mesh.frustumCulled = false
+  return mesh
+}
+
+/**
+ * A filled convex polygon from virtual-pixel points in order, y down.
+ * Fan-triangulated, so the points must describe a convex shape.
+ */
+export function screenPoly(points: [number, number][], color: number, opacity = 1): THREE.Mesh {
+  const positions: number[] = []
+  const indices: number[] = []
+  for (const [x, y] of points) positions.push(x, VIRTUAL_H - y, 0)
+  for (let i = 1; i < points.length - 1; i++) indices.push(0, i, i + 1)
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geo.setIndex(indices)
+  const mesh = new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      color, depthTest: false, depthWrite: false,
+      transparent: opacity < 1, opacity,
+    }),
+  )
+  mesh.frustumCulled = false
+  return mesh
+}

@@ -24,10 +24,15 @@ const GRASS_CELL = { col: 4, row: 1 }
 const DIRT_CELL = { col: 5, row: 6 }
 
 /** Three opponents, each with its own arena layout. */
-const NPCS: { id: string; tile: [number, number]; dialogue: string; battle: string }[] = [
-  { id: 'blorb',   tile: [6, 4],  dialogue: '/data/dialogue/blorb.json',   battle: '/data/battles/blorb.json' },
-  { id: 'wing',    tile: [10, 4], dialogue: '/data/dialogue/wing.json',    battle: '/data/battles/wing.json' },
-  { id: 'plumber', tile: [14, 4], dialogue: '/data/dialogue/plumber.json', battle: '/data/battles/plumber.json' },
+const NPCS: {
+  id: string; tile: [number, number]; dialogue: string; battle: string; tint: number
+}[] = [
+  { id: 'blorb',   tile: [6, 4],  tint: 0xffffff,
+    dialogue: '/data/dialogue/blorb.json',   battle: '/data/battles/blorb.json' },
+  { id: 'wing',    tile: [10, 4], tint: 0xffb27a,
+    dialogue: '/data/dialogue/wing.json',    battle: '/data/battles/wing.json' },
+  { id: 'plumber', tile: [14, 4], tint: 0x8fe6a4,
+    dialogue: '/data/dialogue/plumber.json', battle: '/data/battles/plumber.json' },
 ]
 
 const DIRS: Record<Facing, [number, number]> = {
@@ -87,6 +92,7 @@ export class OverworldMode implements Mode {
       const slot = this.npcs[i]!
       // All three share Character 2's sheet; it is the only NPC art in the drop.
       slot.sprite = await CharacterSprite.load(npcDef, this.assets)
+      slot.sprite.setTint(spec.tint)
       slot.sprite.setFrame(slot.facing, 0)
       this.sprites.add(slot.sprite.mesh)
       slot.script = (await (await fetch(spec.dialogue)).json()) as DialogueScript

@@ -6,7 +6,7 @@ import type { Assets } from '../../core/assets'
 import { ScreenLayer } from '../../ui/screen'
 import { getFont } from '../../ui/bitmapFont'
 import { makeTextMesh, textWidth } from '../../ui/text'
-import { screenRect } from '../../core/screenScene'
+import { screenLine, screenPoly } from '../../core/screenScene'
 import { VIRTUAL_W, VIRTUAL_H, TICK_HZ } from '../../core/config'
 import { BattleSim, opponentTarget, type BattleConfig } from './physics'
 import { makePlaceholderTexture } from '../../world/placeholder'
@@ -17,6 +17,27 @@ type Phase = 'countdown' | 'play' | 'scored' | 'over'
 
 const COUNTDOWN_TICKS = 30   // doc §8.3
 const SCORED_TICKS = 45
+/**
+ * Camera elevation. Steeper than doc §4.3's 35 degrees: the table is framed to
+ * fill the frame height, and a steeper angle foreshortens it less, so it ends
+ * up narrower on screen and leaves wider side margins for the UI.
+ */
+const ELEVATION_DEG = 58
+/** Fraction of the frame height the table is fitted to. */
+const TABLE_FILL = 0.96
+/** Gap between the table's projected edge and a side panel. */
+const PANEL_GAP = 14
+/** Wall thickness; also the margin the camera fit must leave around the table. */
+const WALL_T = 0.16
+
+/**
+ * Sim x to scene x. The camera sits behind the player's end at -z looking up
+ * the table, which puts world +x on the *left* of the screen. Negating here
+ * makes positive sim x read as screen right, so paddle controls and obstacle
+ * coordinates in the layout JSON both match what the player sees.
+ */
+const sceneX = (simX: number): number => -simX
+
 /** Doc §8.3 stuck-puck rule: below this speed for this long forces a faceoff. */
 const STUCK_SPEED = 0.2
 const STUCK_TICKS = 3 * TICK_HZ
@@ -42,6 +63,12 @@ export class BattleMode implements Mode {
   private opponentMesh?: THREE.Mesh
   private wingMesh?: THREE.Mesh
   private pipeMeshes = new Map<string, THREE.Mesh>()
+  /**
+   * The table's projected silhouette edges in virtual pixels, as x at the top
+   * and bottom of the frame. The table is a trapezoid under perspective, so
+   * these differ and the usable margin is a trapezoid too.
+   */
+  private edge = { leftTop: 320, leftBottom: 320, rightTop: 640, rightBottom: 640 }
   /** Everything built for the current layout, freed when the battle is left. */
   private disposables: (THREE.BufferGeometry | THREE.Material | THREE.Texture)[] = []
 
@@ -64,6 +91,7 @@ export class BattleMode implements Mode {
 
   exit(): void {
     this.screen.clear()
+    this.screen.unpinAll()
     // Each opponent has its own layout, so the scene cannot be reused between
     // battles. Tear it down rather than accumulating one arena per fight.
     this.scene.clear()
@@ -110,7 +138,7 @@ export class BattleMode implements Mode {
       m.position.set(x, 0.15, z)
       this.scene.add(m)
     }
-    const t = 0.16
+    const t = WALL_T
     wall(t, length + t * 2, -width / 2 - t / 2, 0)
     wall(t, length + t * 2, width / 2 + t / 2, 0)
     const side = (width - goalWidth) / 2
@@ -137,35 +165,126 @@ export class BattleMode implements Mode {
     key.position.set(2, 6, 3)
     this.scene.add(key)
 
-    // Doc §4.3: fixed camera behind and above the player's end, ~35 degrees.
-    const elev = 35 * (Math.PI / 180)
-    const dist = length * 0.92
-    this.camera.position.set(0, Math.sin(elev) * dist, -length / 2 - Math.cos(elev) * dist * 0.55)
-    this.camera.lookAt(0, 0, length * 0.06)
+    this.fitCamera(width, length)
 
     this.buildObstacles()
 
     const sheetPath = p.config.opponent.sheet
     if (sheetPath) {
+      // The opponent used to stand behind the far goal in 3D, which capped how
+      // tall the table could be framed. It is now a portrait in the side panel.
       const sheet = await loadAseprite(sheetPath, this.assets)
       const f = sheet.frames[0]!
-      const geo = this.own(new THREE.PlaneGeometry(1.5, 1.5))
+      const size = 144
+      const geo = new THREE.PlaneGeometry(size, size)
       const uv = geo.getAttribute('uv') as THREE.BufferAttribute
       const a = uv.array as Float32Array
       a[0] = f.u0; a[1] = f.v1; a[2] = f.u1; a[3] = f.v1
       a[4] = f.u0; a[5] = f.v0; a[6] = f.u1; a[7] = f.v0
       uv.needsUpdate = true
-      const sprite = new THREE.Mesh(
-        geo,
-        this.own(new THREE.MeshBasicMaterial({ map: sheet.texture, transparent: true, alphaTest: 0.5 })),
-      )
-      sprite.position.set(0, 0.75, length / 2 + 1.0)
-      // Doc §4.3: the opponent billboards about Y to face the camera. The
-      // camera sits at -Z and a plane's normal is +Z, so without this it is
-      // backface-culled and silently invisible.
-      sprite.rotation.y = Math.PI
-      this.scene.add(sprite)
+      const portrait = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        map: sheet.texture, transparent: true, alphaTest: 0.5,
+        color: p.config.opponent.tint ?? 0xffffff,
+        depthTest: false, depthWrite: false,
+      }))
+      const usable = this.edge.leftTop - PANEL_GAP - 8
+      const px = Math.max(8, 8 + (usable - size) / 2)
+      portrait.position.set(px + size / 2, VIRTUAL_H - (52 + size / 2), 0)
+      portrait.frustumCulled = false
+      this.screen.pin(portrait)
     }
+  }
+
+  /**
+   * Frame the table to fill the frame height, then record where its projected
+   * edges land so the UI can sit entirely outside them.
+   *
+   * Solved numerically rather than by hand: project the table's corners and
+   * binary-search the camera distance. That stays correct when a layout changes
+   * the table's dimensions, which the plumber's wider table already does.
+   */
+  private fitCamera(width: number, length: number): void {
+    const e = ELEVATION_DEG * (Math.PI / 180)
+    // Fit the walls, not the playing surface: they sit a wall-thickness beyond
+    // it on every side and 0.3 above it, and fitting the surface alone clipped
+    // them off the bottom of the frame.
+    const hx = width / 2 + WALL_T
+    const hz = length / 2 + WALL_T
+    const corners: THREE.Vector3[] = []
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (const y of [0, 0.3]) corners.push(new THREE.Vector3(sx * hx, y, sz * hz))
+      }
+    }
+
+    const measure = (dist: number, targetZ: number) => {
+      this.camera.position.set(0, Math.sin(e) * dist, targetZ - Math.cos(e) * dist)
+      this.camera.lookAt(0, 0, targetZ)
+      this.camera.near = Math.max(0.1, dist * 0.05)
+      this.camera.far = dist * 4
+      this.camera.updateProjectionMatrix()
+      this.camera.updateMatrixWorld()
+      let minY = Infinity, maxY = -Infinity
+      for (const c of corners) {
+        const v = c.clone().project(this.camera)
+        minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y)
+      }
+      return { height: maxY - minY, midY: (minY + maxY) / 2 }
+    }
+
+    // Two interleaved solves. Distance sets how much of the frame height the
+    // table fills; the look-at point centres it. They interact — under
+    // perspective the near half projects larger than the far half, so a camera
+    // aimed at the table's world centre produces an off-centre projection that
+    // clips at the bottom — so alternate until both settle.
+    let dist = 20
+    let targetZ = 0
+    for (let round = 0; round < 5; round++) {
+      let lo = 1
+      let hi = 200
+      for (let i = 0; i < 34; i++) {
+        const mid = (lo + hi) / 2
+        // NDC spans 2, so a full-height fit is height === 2.
+        if (measure(mid, targetZ).height > TABLE_FILL * 2) lo = mid
+        else hi = mid
+      }
+      dist = hi
+
+      // midY falls as the look-at point moves up-table, so bisect on its sign.
+      let zlo = -length
+      let zhi = length
+      for (let i = 0; i < 34; i++) {
+        const mid = (zlo + zhi) / 2
+        if (measure(dist, mid).midY > 0) zlo = mid
+        else zhi = mid
+      }
+      targetZ = (zlo + zhi) / 2
+    }
+
+    measure(dist, targetZ)
+
+    // Take the actual silhouette rather than a bounding box: the side edges are
+    // straight lines in 3D and perspective preserves straight lines, so each is
+    // still a straight line on screen. Extrapolate each to the frame's top and
+    // bottom to get the boundary the UI must stay clear of.
+    const toScreen = (x: number, y: number, z: number) => {
+      const v = new THREE.Vector3(x, y, z).project(this.camera)
+      return { x: ((v.x + 1) / 2) * VIRTUAL_W, y: ((1 - v.y) / 2) * VIRTUAL_H }
+    }
+    const edgeAt = (sx: number) => {
+      const far = toScreen(sx * hx, 0.3, hz)
+      const near = toScreen(sx * hx, 0, -hz)
+      const dy = near.y - far.y
+      const at = (y: number) =>
+        Math.abs(dy) < 1e-6 ? far.x : far.x + ((near.x - far.x) * (y - far.y)) / dy
+      return { top: at(0), bottom: at(VIRTUAL_H) }
+    }
+    // Assign by measured position, not by the sign of world x: which side of
+    // the screen a world x lands on depends on where the camera sits.
+    const a = edgeAt(-1)
+    const b = edgeAt(1)
+    const [l, r] = a.top <= b.top ? [a, b] : [b, a]
+    this.edge = { leftTop: l.top, leftBottom: l.bottom, rightTop: r.top, rightBottom: r.bottom }
   }
 
   /** Blocks, pipes and the wing, drawn from the layout's obstacle list. */
@@ -175,7 +294,7 @@ export class BattleMode implements Mode {
         this.own(new THREE.BoxGeometry(b.halfW * 2, 0.22, b.halfH * 2)),
         this.own(new THREE.MeshLambertMaterial({ color: 0x3d6d8c })),
       )
-      m.position.set(b.x, 0.11, b.y)
+      m.position.set(sceneX(b.x), 0.11, b.y)
       this.scene.add(m)
     }
 
@@ -188,7 +307,7 @@ export class BattleMode implements Mode {
         this.own(new THREE.MeshLambertMaterial({ color })),
       )
       ring.rotation.x = -Math.PI / 2
-      ring.position.set(pipe.x, 0.09, pipe.y)
+      ring.position.set(sceneX(pipe.x), 0.09, pipe.y)
       this.scene.add(ring)
 
       const mouth = new THREE.Mesh(
@@ -196,7 +315,7 @@ export class BattleMode implements Mode {
         this.own(new THREE.MeshBasicMaterial({ color: 0x0b1119 })),
       )
       mouth.rotation.x = -Math.PI / 2
-      mouth.position.set(pipe.x, 0.02, pipe.y)
+      mouth.position.set(sceneX(pipe.x), 0.02, pipe.y)
       this.scene.add(mouth)
       this.pipeMeshes.set(pipe.id, ring)
     })
@@ -214,7 +333,7 @@ export class BattleMode implements Mode {
         this.own(new THREE.PlaneGeometry(wing.radius * 2.2, wing.radius * 2.2)),
         this.own(new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide })),
       )
-      m.position.set(wing.x, wing.radius * 1.1, wing.y)
+      m.position.set(sceneX(wing.x), wing.radius * 1.1, wing.y)
       m.rotation.y = Math.PI
       this.scene.add(m)
       this.wingMesh = m
@@ -276,43 +395,94 @@ export class BattleMode implements Mode {
       }
     }
 
-    if (this.puckMesh) this.puckMesh.position.set(this.sim.puck.x, this.puckMesh.position.y, this.sim.puck.y)
-    if (this.playerMesh) this.playerMesh.position.set(this.sim.player.x, this.playerMesh.position.y, this.sim.player.y)
-    if (this.opponentMesh) this.opponentMesh.position.set(this.sim.opponent.x, this.opponentMesh.position.y, this.sim.opponent.y)
+    if (this.puckMesh) this.puckMesh.position.set(sceneX(this.sim.puck.x), this.puckMesh.position.y, this.sim.puck.y)
+    if (this.playerMesh) this.playerMesh.position.set(sceneX(this.sim.player.x), this.playerMesh.position.y, this.sim.player.y)
+    if (this.opponentMesh) this.opponentMesh.position.set(sceneX(this.sim.opponent.x), this.opponentMesh.position.y, this.sim.opponent.y)
     this.buildUi()
   }
 
+  /**
+   * All UI lives in the margins either side of the table, which is framed to
+   * fill the frame height. Those margins are trapezoids, not rectangles — the
+   * table narrows toward its far end, so there is markedly more room at the top
+   * — and the panels are drawn to that true shape and outlined, so the space
+   * actually available for information is visible while laying content out.
+   */
   private buildUi(): void {
     const font = getFont()
-    const objects: THREE.Object3D[] = []
+    const o: THREE.Object3D[] = []
     const dislodge = this.sim.cfg.rules.mode === 'dislodge'
-    // In dislodge mode there is no score to show, so the readout is the hits
-    // left on the wing instead.
-    const readout = dislodge
-      ? `WING x${this.sim.wingHits}`
-      : `P ${this.score[0]} - ${this.score[1]} O`
-    objects.push(screenRect(VIRTUAL_W / 2 - 90, 10, 180, 30, 0x0d1420))
-    objects.push(makeTextMesh(font, readout, VIRTUAL_W / 2 - textWidth(font, readout) / 2, 16, 0xffffff))
+    const E = 8
+    const top = E
+    const bottom = VIRTUAL_H - E
+    const G = PANEL_GAP
 
-    const who = this.sim.cfg.opponent.name.toUpperCase()
-    objects.push(makeTextMesh(font, who, 16, 16, 0x8ea0bd))
+    const FILL = 0x0c1320
+    const LINE = 0x35506e
+    const DIM = 0x7d93b2
+    const BRIGHT = 0xe8eefb
 
-    const banner = (text: string, color: number) => {
-      const w = textWidth(font, text, 2)
-      objects.push(screenRect(0, VIRTUAL_H / 2 - 34, VIRTUAL_W, 68, 0x0d1420))
-      objects.push(makeTextMesh(font, text, VIRTUAL_W / 2 - w / 2, VIRTUAL_H / 2 - 18, color, 2))
+    // Left margin: outer edge is the frame, inner edge follows the table.
+    const lTop = this.edge.leftTop - G
+    const lBottom = this.edge.leftBottom - G
+    const leftPoly: [number, number][] = [[E, top], [lTop, top], [lBottom, bottom], [E, bottom]]
+    // Right margin mirrors it.
+    const rTop = this.edge.rightTop + G
+    const rBottom = this.edge.rightBottom + G
+    const rightPoly: [number, number][] = [
+      [rTop, top], [VIRTUAL_W - E, top], [VIRTUAL_W - E, bottom], [rBottom, bottom],
+    ]
+
+    for (const poly of [leftPoly, rightPoly]) {
+      o.push(screenPoly(poly, FILL, 0.92))
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i]!
+        const b = poly[(i + 1) % poly.length]!
+        o.push(screenLine(a[0], a[1], b[0], b[1], 1, LINE))
+      }
     }
+
+    const lw = Math.round(lTop - E)
+    const rw = Math.round(VIRTUAL_W - E - rTop)
+    o.push(makeTextMesh(font, `${lw}>${Math.round(lBottom - E)}`, E + 6, bottom - 20, 0x415a78))
+    const dimsR = `${Math.round(VIRTUAL_W - E - rBottom)}<${rw}`
+    o.push(makeTextMesh(font, dimsR, VIRTUAL_W - E - 6 - textWidth(font, dimsR), bottom - 20, 0x415a78))
+
+    // Left content hugs the frame's left edge, which is vertical, so it is
+    // always clear of the sloping inner boundary.
+    const lx = E + 12
+    o.push(makeTextMesh(font, this.sim.cfg.opponent.name.toUpperCase(), lx, top + 14, DIM))
+    if (dislodge) {
+      o.push(makeTextMesh(font, 'WING', lx, top + 224, DIM))
+      o.push(makeTextMesh(font, `x${this.sim.wingHits}`, lx, top + 244, BRIGHT, 2))
+      o.push(makeTextMesh(font, 'KNOCK IT LOOSE', lx, top + 300, 0x415a78))
+    } else {
+      o.push(makeTextMesh(font, 'SCORE', lx, top + 224, DIM))
+      o.push(makeTextMesh(font, String(this.score[1]), lx, top + 246, BRIGHT, 3))
+    }
+
+    // Right content is right-aligned to the frame edge for the same reason.
+    const rEdge = VIRTUAL_W - E - 12
+    const rt = (text: string, y: number, color: number, scale = 1) =>
+      o.push(makeTextMesh(font, text, rEdge - textWidth(font, text, scale), y, color, scale))
+
+    rt('YOU', top + 14, DIM)
+    if (!dislodge) {
+      rt('SCORE', top + 44, DIM)
+      rt(String(this.score[0]), top + 66, BRIGHT, 3)
+    }
+    rt(`FIRST TO ${this.sim.cfg.rules.targetScore}`, top + 140, 0x415a78)
+
     if (this.phase === 'countdown') {
-      banner(String(Math.ceil(this.timer / (COUNTDOWN_TICKS / 3))), 0xffd76b)
+      rt(String(Math.max(1, Math.ceil(this.timer / (COUNTDOWN_TICKS / 3)))), top + 250, 0xffd76b, 3)
     } else if (this.phase === 'scored') {
-      banner('GOAL', 0xffd76b)
+      rt('GOAL', top + 250, 0xffd76b, 2)
     } else if (this.phase === 'over') {
-      const text = this.won ? (dislodge ? 'DISLODGED' : 'WIN') : 'LOSE'
-      banner(text, this.won ? 0x7fd0a0 : 0xd07f8a)
-      const hint = 'PRESS Z'
-      objects.push(makeTextMesh(font, hint, VIRTUAL_W / 2 - textWidth(font, hint) / 2, VIRTUAL_H / 2 + 26, 0x8ea0bd))
+      rt(this.won ? (dislodge ? 'LOOSE!' : 'WIN') : 'LOSE', top + 250, this.won ? 0x7fd0a0 : 0xd07f8a, 2)
+      rt('PRESS Z', top + 300, DIM)
     }
-    this.screen.set(objects)
+
+    this.screen.set(o)
   }
 
   render(): void {
