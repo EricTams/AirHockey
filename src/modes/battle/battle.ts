@@ -17,9 +17,9 @@ type Phase = 'ready' | 'countdown' | 'play' | 'scored' | 'over'
 
 const COUNTDOWN_TICKS = 30   // doc §8.3
 /**
- * Ticks the ready prompt ignores input. Without it a player mashing through the
- * dialogue carries a press into the battle and starts the match instantly,
- * never seeing the prompt at all.
+ * Ticks a ready prompt ignores input. Without it a press carried in from the
+ * dialogue, or a click during the goal pause, starts play instantly and the
+ * prompt is never seen.
  */
 const READY_LOCK_TICKS = 20
 const SCORED_TICKS = 45
@@ -63,6 +63,8 @@ export class BattleMode implements Mode {
   private score: [number, number] = [0, 0]
   private returnTo = 'overworld'
   private won = false
+  /** False until the first faceoff has been served, so the prompt can differ. */
+  private started = false
 
   private puckMesh?: THREE.Mesh
   private playerMesh?: THREE.Mesh
@@ -96,6 +98,7 @@ export class BattleMode implements Mode {
     this.phase = 'ready'
     this.timer = READY_LOCK_TICKS
     this.stuck = 0
+    this.started = false
     void this.build(p)
   }
 
@@ -402,11 +405,13 @@ export class BattleMode implements Mode {
 
     if (this.phase === 'ready') {
       if (this.timer > 0) this.timer--
-      // Clicking the paddle starts the match. Z also works, so the game stays
-      // playable without a pointer.
-      else if ((this.input.pointerPressed && this.pointerOnPaddle()) || this.input.pressed('interact')) {
+      // Play only ever begins by grabbing your own paddle with the pointer.
+      // There is deliberately no key for this: the match must not start until
+      // the player has actually taken hold of it.
+      else if (this.input.pointerPressed && this.pointerOnPaddle()) {
         this.phase = 'countdown'
         this.timer = COUNTDOWN_TICKS
+        this.started = true
       }
       // Highlight the paddle while it is the thing being asked for.
       if (this.playerMesh) {
@@ -442,11 +447,13 @@ export class BattleMode implements Mode {
       if (--this.timer <= 0) {
         // Nudge the faceoff toward whoever just conceded.
         this.sim.faceoff(this.score[0] > this.score[1] ? 0.5 : -0.5)
-        this.phase = 'countdown'
-        this.timer = COUNTDOWN_TICKS
+        // Every faceoff waits on the player, not just the first: play should
+        // never resume while they are still reacting to the last goal.
+        this.phase = 'ready'
+        this.timer = READY_LOCK_TICKS
       }
     } else if (this.phase === 'over') {
-      if (this.input.pressed('interact')) {
+      if (this.input.pointerPressed || this.input.pressed('interact')) {
         this.onSwitch?.(this.returnTo)
         return
       }
@@ -533,14 +540,14 @@ export class BattleMode implements Mode {
     if (this.phase === 'ready') {
       rt('CLICK YOUR', top + 244, 0xffd76b)
       rt('PADDLE', top + 264, 0xffd76b, 2)
-      rt('TO START', top + 302, DIM)
+      rt(this.started ? 'TO RESUME' : 'TO START', top + 302, DIM)
     } else if (this.phase === 'countdown') {
       rt(String(Math.max(1, Math.ceil(this.timer / (COUNTDOWN_TICKS / 3)))), top + 250, 0xffd76b, 3)
     } else if (this.phase === 'scored') {
       rt('GOAL', top + 250, 0xffd76b, 2)
     } else if (this.phase === 'over') {
       rt(this.won ? (dislodge ? 'LOOSE!' : 'WIN') : 'LOSE', top + 250, this.won ? 0x7fd0a0 : 0xd07f8a, 2)
-      rt('PRESS Z', top + 300, DIM)
+      rt('CLICK TO GO ON', top + 300, DIM)
     }
 
     this.screen.set(o)
