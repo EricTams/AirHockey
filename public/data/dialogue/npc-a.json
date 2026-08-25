@@ -1,0 +1,15 @@
+{
+  "id": "npc_a",
+  "lines": [
+    {
+      "name": "Blorb",
+      "face": "assets/faces/character-2.png",
+      "text": "You there. That paddle on your belt is not decoration, is it?"
+    },
+    {
+      "name": "Blorb",
+      "face": "assets/faces/character-2.png",
+      "text": "Table's set. Puck's cold. First to one goal, and I will not go easy just because you are new here."
+    }
+  ]
+}

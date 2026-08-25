@@ -74,3 +74,11 @@ export function uvIndex(code: number): number {
   if (code < FIRST_CHAR || code > LAST_CHAR) return '?'.charCodeAt(0) - FIRST_CHAR
   return code - FIRST_CHAR
 }
+
+let shared: BitmapFont | undefined
+
+/** The one font instance. Generating the atlas per call would leak canvases. */
+export function getFont(): BitmapFont {
+  shared ??= generatePlaceholderFont()
+  return shared
+}

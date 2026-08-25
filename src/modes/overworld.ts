@@ -8,6 +8,8 @@ import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../w
 import { buildGroundMesh } from '../world/groundMesh'
 import { Backdrop } from '../world/backdrop'
 import { TILE } from '../core/config'
+import type { DialogueScript } from './dialogue'
+import type { BattleConfig } from './battle/physics'
 
 /** Doc §6.2: a step tweens over 12 frames at 60Hz. */
 const STEP_FRAMES = 12
@@ -34,6 +36,12 @@ export class OverworldMode implements Mode {
   private player?: CharacterSprite
 
   // Player state
+  private npc?: CharacterSprite
+  private npcTile: [number, number] = [10, 4]
+  private npcFacing: Facing = 'down'
+  private script?: DialogueScript
+  private battleConfig?: BattleConfig
+
   private tx = 10
   private ty = 7
   private facing: Facing = 'down'
@@ -64,14 +72,54 @@ export class OverworldMode implements Mode {
     const def = (await (await fetch('/data/characters/character-1.json')).json()) as CharacterDef
     this.player = await CharacterSprite.load(def, this.assets)
     this.sprites.add(this.player.mesh)
+
+    const npcDef = (await (await fetch('/data/characters/character-2.json')).json()) as CharacterDef
+    this.npc = await CharacterSprite.load(npcDef, this.assets)
+    this.npc.setFrame(this.npcFacing, 0)
+    this.sprites.add(this.npc.mesh)
+
+    this.script = (await (await fetch('/data/dialogue/npc-a.json')).json()) as DialogueScript
+    this.battleConfig = (await (await fetch('/data/battles/npc-a.json')).json()) as BattleConfig
   }
 
   enter(): void {}
   exit(): void {}
 
   private blocked(tx: number, ty: number): boolean {
-    return tx < 0 || ty < 0 || tx >= MAP_COLS || ty >= MAP_ROWS
+    if (tx < 0 || ty < 0 || tx >= MAP_COLS || ty >= MAP_ROWS) return true
+    // NPCs occupy their tile for collision (doc §6.2).
+    return tx === this.npcTile[0] && ty === this.npcTile[1]
   }
+
+  /** Doc §6.4: interact acts on the tile the player faces. */
+  private tryInteract(): boolean {
+    const [dx, dy] = DIRS[this.facing]
+    const fx = this.tx + dx
+    const fy = this.ty + dy
+    if (fx !== this.npcTile[0] || fy !== this.npcTile[1]) return false
+    if (!this.script) return false
+
+    // Turn the NPC to face the player before speaking.
+    const opposite: Record<Facing, Facing> = { up: 'down', down: 'up', left: 'right', right: 'left' }
+    this.npcFacing = opposite[this.facing]
+    this.npc?.setFrame(this.npcFacing, 0)
+
+    this.onSwitch?.('dialogue', {
+      script: this.script,
+      // Doc §7.3: a battle-flagged NPC starts its battle when dialogue ends.
+      next: this.battleConfig
+        ? { mode: 'battle', payload: {
+            config: this.battleConfig,
+            opponentSheet: '/assets/characters/character-2-idle.json',
+            returnTo: 'overworld',
+          } }
+        : { mode: 'overworld' },
+    })
+    return true
+  }
+
+  private onSwitch?: (mode: string, payload?: unknown) => void
+  bindSwitch(fn: (mode: string, payload?: unknown) => void): void { this.onSwitch = fn }
 
   private pressedDir(): Facing | undefined {
     // Last-pressed wins would need history; for v1 a fixed priority is enough.
@@ -84,6 +132,8 @@ export class OverworldMode implements Mode {
 
   update(_dt: number): void {
     if (!this.player) return
+
+    if (this.stepFrames === 0 && this.input.pressed('interact') && this.tryInteract()) return
 
     if (this.stepFrames > 0) {
       // Mid-step: run out the tween. Input is buffered by being re-read on
@@ -127,6 +177,10 @@ export class OverworldMode implements Mode {
 
     this.proj.placeBillboard(this.player.mesh, x, y)
     this.player.mesh.renderOrder = this.proj.sortKey(y)
+    if (this.npc) {
+      this.proj.placeBillboard(this.npc.mesh, this.npcTile[0], this.npcTile[1])
+      this.npc.mesh.renderOrder = this.proj.sortKey(this.npcTile[1])
+    }
     this.proj.lookAt(x, y)
     this.backdrop.update(x, y, this.proj.pitchDeg)
   }

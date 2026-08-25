@@ -4,9 +4,10 @@ import { ModeManager } from './core/mode'
 import { Loop } from './core/loop'
 import { Assets } from './core/assets'
 import { DebugOverlay } from './core/debugOverlay'
-import { StubMode } from './modes/stub'
 import { GalleryMode } from './modes/gallery'
 import { OverworldMode } from './modes/overworld'
+import { DialogueMode } from './modes/dialogue'
+import { BattleMode } from './modes/battle/battle'
 import { VIRTUAL_W, VIRTUAL_H } from './core/config'
 
 const gfx = new Renderer()
@@ -18,9 +19,18 @@ const debug = new DebugOverlay()
 const overworld = new OverworldMode(gfx, input, assets)
 await overworld.init()
 
+// Dialogue draws over a frozen overworld (doc §7.2), so it renders it directly.
+const dialogue = new DialogueMode(gfx, input, assets, overworld)
+const battle = new BattleMode(gfx, input, assets)
+
+const switchTo = (mode: string, payload?: unknown) => modes.switchTo(mode, payload)
+overworld.bindSwitch(switchTo)
+dialogue.bindSwitch(switchTo)
+battle.bindSwitch(switchTo)
+
 modes.register(overworld)
-modes.register(new StubMode('dialogue', gfx, 0x2f4b7c))
-modes.register(new StubMode('battle', gfx, 0x8c2f39))
+modes.register(dialogue)
+modes.register(battle)
 modes.register(new GalleryMode(gfx))
 modes.switchTo('overworld')
 
@@ -46,11 +56,11 @@ const loop = new Loop(
       fps: loop.fps.toFixed(1),
       ticks: loop.ticksLastFrame,
       scale: `${gfx.integerScale}x  ${VIRTUAL_W}x${VIRTUAL_H}`,
-      ...overworld.status,
+      ...(modes.activeName === 'overworld' ? overworld.status : {}),
       stubbed: assets.placeholders.length,
       geometries: gfx.gl.info.memory.geometries,
       textures: gfx.gl.info.memory.textures,
-      keys: 'WASD move  M mode  [ ] pitch  F1',
+      keys: 'WASD  Z talk  M mode  [ ] pitch  F1',
     })
   },
 )
@@ -63,5 +73,5 @@ console.log('[airhockey] booted', {
 })
 
 if (import.meta.env.DEV) {
-  ;(window as unknown as Record<string, unknown>).__game = { gfx, input, modes, loop, debug, assets, overworld }
+  ;(window as unknown as Record<string, unknown>).__game = { gfx, input, modes, loop, debug, assets, overworld, dialogue, battle }
 }
