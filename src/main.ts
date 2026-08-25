@@ -2,22 +2,27 @@ import { Renderer } from './core/renderer'
 import { Input } from './core/input'
 import { ModeManager } from './core/mode'
 import { Loop } from './core/loop'
+import { Assets } from './core/assets'
 import { DebugOverlay } from './core/debugOverlay'
 import { StubMode } from './modes/stub'
 import { GalleryMode } from './modes/gallery'
-import { VIRTUAL_W, VIRTUAL_H, CAMERA_PITCH_DEG } from './core/config'
+import { OverworldMode } from './modes/overworld'
+import { VIRTUAL_W, VIRTUAL_H } from './core/config'
 
 const gfx = new Renderer()
 const input = new Input()
+const assets = new Assets()
 const modes = new ModeManager()
 const debug = new DebugOverlay()
 
-// M0: three stubs standing in for the real modes, to exercise the state machine.
-modes.register(new StubMode('overworld', gfx, 0x3a7d44))
+const overworld = new OverworldMode(gfx, input, assets)
+await overworld.init()
+
+modes.register(overworld)
 modes.register(new StubMode('dialogue', gfx, 0x2f4b7c))
 modes.register(new StubMode('battle', gfx, 0x8c2f39))
 modes.register(new GalleryMode(gfx))
-modes.switchTo('gallery')
+modes.switchTo('overworld')
 
 const loop = new Loop(
   (dt) => {
@@ -27,6 +32,9 @@ const loop = new Loop(
       const next = order[(order.indexOf(modes.activeName) + 1) % order.length]!
       modes.switchTo(next)
     }
+    // Scrub the camera pitch live to evaluate the 2.5D look against real art.
+    if (input.pressed('pitchDown')) overworld.setPitch(overworld.pitch - 5)
+    if (input.pressed('pitchUp')) overworld.setPitch(overworld.pitch + 5)
     modes.update(dt)
     input.endTick()
   },
@@ -37,21 +45,23 @@ const loop = new Loop(
       mode: modes.activeName,
       fps: loop.fps.toFixed(1),
       ticks: loop.ticksLastFrame,
-      virtual: `${VIRTUAL_W}x${VIRTUAL_H}`,
-      scale: `${gfx.integerScale}x`,
-      canvas: `${gfx.gl.domElement.width}x${gfx.gl.domElement.height}`,
-      pitch: `${CAMERA_PITCH_DEG}deg`,
+      scale: `${gfx.integerScale}x  ${VIRTUAL_W}x${VIRTUAL_H}`,
+      ...overworld.status,
+      stubbed: assets.placeholders.length,
       geometries: gfx.gl.info.memory.geometries,
       textures: gfx.gl.info.memory.textures,
-      keys: 'M=mode  F1=overlay',
+      keys: 'WASD move  M mode  [ ] pitch  F1',
     })
   },
 )
 loop.start()
 
-console.log('[airhockey] booted', { virtual: `${VIRTUAL_W}x${VIRTUAL_H}`, modes: modes.names })
+console.log('[airhockey] booted', {
+  virtual: `${VIRTUAL_W}x${VIRTUAL_H}`,
+  modes: modes.names,
+  placeholders: assets.placeholders,
+})
 
-// Dev hook: lets the browser console (and automated checks) inspect live state.
 if (import.meta.env.DEV) {
-  ;(window as unknown as Record<string, unknown>).__game = { gfx, input, modes, loop, debug }
+  ;(window as unknown as Record<string, unknown>).__game = { gfx, input, modes, loop, debug, assets, overworld }
 }

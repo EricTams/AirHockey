@@ -1,0 +1,9 @@
+{
+  "id": "character-2",
+  "frameSize": [48, 48],
+  "idleFrame": 0,
+  "framesPerStep": 2,
+  "directions": {
+    "*": "/assets/characters/character-2-idle.json"
+  }
+}
