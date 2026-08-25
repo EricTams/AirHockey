@@ -55,6 +55,13 @@ export const MISSING_ART: MissingArt[] = [
     width: 48, height: 48,
     reason: 'doc 8.5 opponent hit reaction; both C2 frames read as idle',
   },
+  {
+    path: 'assets/props/chicken-wing.png',
+    label: 'CHICKEN WING',
+    kind: 'generic',
+    width: 64, height: 64,
+    reason: 'lodged in the goal in the Gravy fight; no prop art exists',
+  },
 ]
 
 export function findMissing(path: string): MissingArt | undefined {

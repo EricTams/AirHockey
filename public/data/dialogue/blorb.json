@@ -1,0 +1,9 @@
+{
+  "id": "blorb",
+  "lines": [
+    { "name": "Blorb", "face": "assets/faces/character-2.png",
+      "text": "You there. That paddle on your belt is not decoration, is it?" },
+    { "name": "Blorb", "face": "assets/faces/character-2.png",
+      "text": "My table has bumpers down the middle. Learn the angles or do not bother. First to three." }
+  ]
+}

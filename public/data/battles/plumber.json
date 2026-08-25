@@ -1,0 +1,15 @@
+{
+  "id": "plumber",
+  "opponent": { "name": "Sprocket", "sheet": "/assets/characters/character-2-idle.json",
+                "ai": "standard", "roamDepth": 0.55, "aggression": 0.7 },
+  "table": {
+    "width": 4.4, "length": 7.0, "goalWidth": 1.2,
+    "obstacles": [
+      { "kind": "pipe", "id": "a", "x": -1.45, "y": -1.15, "radius": 0.34, "exit": "b", "turn":  90 },
+      { "kind": "pipe", "id": "b", "x":  1.45, "y":  1.15, "radius": 0.34, "exit": "a", "turn": -90 }
+    ]
+  },
+  "puck":   { "radius": 0.12, "maxSpeed": 14.0, "friction": 0.995, "restitution": 0.98 },
+  "paddle": { "radius": 0.22, "maxSpeed": 9.0 },
+  "rules":  { "mode": "score", "targetScore": 3 }
+}

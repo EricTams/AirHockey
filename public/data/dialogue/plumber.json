@@ -1,0 +1,9 @@
+{
+  "id": "plumber",
+  "lines": [
+    { "name": "Sprocket", "face": "assets/faces/character-2.png",
+      "text": "Careful where you shoot. I ran the pipes myself and they do not run straight." },
+    { "name": "Sprocket", "face": "assets/faces/character-2.png",
+      "text": "Puck goes in one end, comes out the other turned a quarter. Everyone learns that once. First to three." }
+  ]
+}

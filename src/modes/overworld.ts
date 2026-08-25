@@ -23,6 +23,13 @@ const GRASS_CELL = { col: 4, row: 1 }
 /** Solid dirt from the cliff face, used only to make the tile grid legible. */
 const DIRT_CELL = { col: 5, row: 6 }
 
+/** Three opponents, each with its own arena layout. */
+const NPCS: { id: string; tile: [number, number]; dialogue: string; battle: string }[] = [
+  { id: 'blorb',   tile: [6, 4],  dialogue: '/data/dialogue/blorb.json',   battle: '/data/battles/blorb.json' },
+  { id: 'wing',    tile: [10, 4], dialogue: '/data/dialogue/wing.json',    battle: '/data/battles/wing.json' },
+  { id: 'plumber', tile: [14, 4], dialogue: '/data/dialogue/plumber.json', battle: '/data/battles/plumber.json' },
+]
+
 const DIRS: Record<Facing, [number, number]> = {
   up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
 }
@@ -36,11 +43,13 @@ export class OverworldMode implements Mode {
   private player?: CharacterSprite
 
   // Player state
-  private npc?: CharacterSprite
-  private npcTile: [number, number] = [10, 4]
-  private npcFacing: Facing = 'down'
-  private script?: DialogueScript
-  private battleConfig?: BattleConfig
+  private npcs: {
+    tile: [number, number]
+    sprite?: CharacterSprite
+    facing: Facing
+    script?: DialogueScript
+    battle?: BattleConfig
+  }[] = NPCS.map((n) => ({ tile: n.tile, facing: 'down' }))
 
   private tx = 10
   private ty = 7
@@ -74,12 +83,15 @@ export class OverworldMode implements Mode {
     this.sprites.add(this.player.mesh)
 
     const npcDef = (await (await fetch('/data/characters/character-2.json')).json()) as CharacterDef
-    this.npc = await CharacterSprite.load(npcDef, this.assets)
-    this.npc.setFrame(this.npcFacing, 0)
-    this.sprites.add(this.npc.mesh)
-
-    this.script = (await (await fetch('/data/dialogue/npc-a.json')).json()) as DialogueScript
-    this.battleConfig = (await (await fetch('/data/battles/npc-a.json')).json()) as BattleConfig
+    await Promise.all(NPCS.map(async (spec, i) => {
+      const slot = this.npcs[i]!
+      // All three share Character 2's sheet; it is the only NPC art in the drop.
+      slot.sprite = await CharacterSprite.load(npcDef, this.assets)
+      slot.sprite.setFrame(slot.facing, 0)
+      this.sprites.add(slot.sprite.mesh)
+      slot.script = (await (await fetch(spec.dialogue)).json()) as DialogueScript
+      slot.battle = (await (await fetch(spec.battle)).json()) as BattleConfig
+    }))
   }
 
   enter(): void {}
@@ -88,7 +100,7 @@ export class OverworldMode implements Mode {
   private blocked(tx: number, ty: number): boolean {
     if (tx < 0 || ty < 0 || tx >= MAP_COLS || ty >= MAP_ROWS) return true
     // NPCs occupy their tile for collision (doc §6.2).
-    return tx === this.npcTile[0] && ty === this.npcTile[1]
+    return this.npcs.some((n) => n.tile[0] === tx && n.tile[1] === ty)
   }
 
   /** Doc §6.4: interact acts on the tile the player faces. */
@@ -96,23 +108,19 @@ export class OverworldMode implements Mode {
     const [dx, dy] = DIRS[this.facing]
     const fx = this.tx + dx
     const fy = this.ty + dy
-    if (fx !== this.npcTile[0] || fy !== this.npcTile[1]) return false
-    if (!this.script) return false
+    const npc = this.npcs.find((n) => n.tile[0] === fx && n.tile[1] === fy)
+    if (!npc?.script) return false
 
     // Turn the NPC to face the player before speaking.
     const opposite: Record<Facing, Facing> = { up: 'down', down: 'up', left: 'right', right: 'left' }
-    this.npcFacing = opposite[this.facing]
-    this.npc?.setFrame(this.npcFacing, 0)
+    npc.facing = opposite[this.facing]
+    npc.sprite?.setFrame(npc.facing, 0)
 
     this.onSwitch?.('dialogue', {
-      script: this.script,
+      script: npc.script,
       // Doc §7.3: a battle-flagged NPC starts its battle when dialogue ends.
-      next: this.battleConfig
-        ? { mode: 'battle', payload: {
-            config: this.battleConfig,
-            opponentSheet: '/assets/characters/character-2-idle.json',
-            returnTo: 'overworld',
-          } }
+      next: npc.battle
+        ? { mode: 'battle', payload: { config: npc.battle, returnTo: 'overworld' } }
         : { mode: 'overworld' },
     })
     return true
@@ -177,9 +185,10 @@ export class OverworldMode implements Mode {
 
     this.proj.placeBillboard(this.player.mesh, x, y)
     this.player.mesh.renderOrder = this.proj.sortKey(y)
-    if (this.npc) {
-      this.proj.placeBillboard(this.npc.mesh, this.npcTile[0], this.npcTile[1])
-      this.npc.mesh.renderOrder = this.proj.sortKey(this.npcTile[1])
+    for (const npc of this.npcs) {
+      if (!npc.sprite) continue
+      this.proj.placeBillboard(npc.sprite.mesh, npc.tile[0], npc.tile[1])
+      npc.sprite.mesh.renderOrder = this.proj.sortKey(npc.tile[1])
     }
     this.proj.lookAt(x, y)
     this.backdrop.update(x, y, this.proj.pitchDeg)

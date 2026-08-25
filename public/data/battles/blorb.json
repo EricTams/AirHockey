@@ -1,0 +1,15 @@
+{
+  "id": "blorb",
+  "opponent": { "name": "Blorb", "sheet": "/assets/characters/character-2-idle.json",
+                "ai": "standard", "roamDepth": 0.45, "aggression": 0.5 },
+  "table": {
+    "width": 4.0, "length": 7.0, "goalWidth": 1.2,
+    "obstacles": [
+      { "kind": "block", "x": -1.1, "y": 0.0, "halfW": 0.45, "halfH": 0.16 },
+      { "kind": "block", "x":  1.1, "y": 0.0, "halfW": 0.45, "halfH": 0.16 }
+    ]
+  },
+  "puck":   { "radius": 0.12, "maxSpeed": 14.0, "friction": 0.995, "restitution": 0.98 },
+  "paddle": { "radius": 0.22, "maxSpeed": 9.0 },
+  "rules":  { "mode": "score", "targetScore": 3 }
+}

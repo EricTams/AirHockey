@@ -1,0 +1,14 @@
+{
+  "id": "wing",
+  "opponent": { "name": "Gravy", "sheet": "/assets/characters/character-2-idle.json",
+                "ai": "inert" },
+  "table": {
+    "width": 4.0, "length": 7.0, "goalWidth": 1.4,
+    "obstacles": [
+      { "kind": "wing", "x": 0.0, "y": 3.15, "radius": 0.42, "hits": 3 }
+    ]
+  },
+  "puck":   { "radius": 0.12, "maxSpeed": 14.0, "friction": 0.996, "restitution": 0.98 },
+  "paddle": { "radius": 0.22, "maxSpeed": 9.0 },
+  "rules":  { "mode": "dislodge", "targetScore": 1 }
+}
