@@ -1,5 +1,8 @@
 import * as THREE from 'three'
-import { TILE, VIRTUAL_W, VIRTUAL_H, HEIGHT_STEP, CAMERA_PITCH_DEG } from '../core/config'
+import {
+  TILE, VIRTUAL_W, VIRTUAL_H, HEIGHT_STEP, CAMERA_PITCH_DEG,
+  FOV_FLAT_DEG, FOV_TILTED_DEG,
+} from '../core/config'
 
 const DEG = Math.PI / 180
 
@@ -17,20 +20,37 @@ const DEG = Math.PI / 180
  *             giving the classic top-down look. This is what v1 ships.
  *   pitch ~35 the identical quads stand upright as real walls and props.
  *
+ * Projection follows the same dial. Rather than switching camera types — a
+ * visible cut mid-scrub — this is always a PerspectiveCamera whose FOV is
+ * driven by pitch. A ~1 degree FOV at long range is optically orthographic, so
+ * the flat view stays pixel-exact; widening it as the camera tilts introduces
+ * real convergence, which is what gives the tilted view a true horizon and
+ * makes distance read.
+ *
  * Billboards rotate about their BOTTOM EDGE, which is pinned to the SOUTH edge
  * of the tile (ty + 0.5). At pitch 90 that makes a one-tile-tall sprite cover
  * exactly its own tile; anchoring at the tile centre instead would shift it
  * half a tile north of where it logically stands.
  */
 export class Projection {
-  readonly camera: THREE.OrthographicCamera
+  readonly camera: THREE.PerspectiveCamera
   private pitch: number
+
+  /** Half-height of the framed area at the focus plane, in tiles. */
+  private static readonly HALF_H = VIRTUAL_H / TILE / 2   // 5.625 tiles
 
   constructor(pitchDeg = CAMERA_PITCH_DEG) {
     this.pitch = pitchDeg
-    const halfW = VIRTUAL_W / TILE / 2   // 10 tiles
-    const halfH = VIRTUAL_H / TILE / 2   // 5.625 tiles
-    this.camera = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.1, 200)
+    this.camera = new THREE.PerspectiveCamera(FOV_FLAT_DEG, VIRTUAL_W / VIRTUAL_H, 0.1, 4000)
+  }
+
+  /** 0 at top-down, 1 at full tilt. Drives both FOV and the flatness tests. */
+  private get tilt(): number {
+    return Math.max(0, Math.min(1, (90 - this.pitch) / 55))
+  }
+
+  get fovDeg(): number {
+    return FOV_FLAT_DEG + (FOV_TILTED_DEG - FOV_FLAT_DEG) * this.tilt
   }
 
   get pitchDeg(): number { return this.pitch }
@@ -61,14 +81,28 @@ export class Projection {
    * the follow, or sub-pixel camera motion shimmers the whole scene.
    */
   lookAt(x: number, z: number, height = 0): void {
-    const px = Math.round(x * TILE) / TILE
-    const pz = Math.round(z * TILE) / TILE
+    // Snapping only means anything while the projection is effectively
+    // orthographic; under real convergence there is no fixed pixel grid.
+    const px = this.isFlat ? Math.round(x * TILE) / TILE : x
+    const pz = this.isFlat ? Math.round(z * TILE) / TILE : z
     const y = height * HEIGHT_STEP
+
+    // Pull the camera back far enough that the framed area stays the same size
+    // at the focus plane whatever the FOV, so widening the lens adds
+    // convergence without also zooming.
+    const fov = this.fovDeg
+    const dist = Projection.HALF_H / Math.tan((fov / 2) * DEG)
+
     const p = this.pitch * DEG
-    const dist = 50
+    this.camera.fov = fov
     this.camera.position.set(px, y + Math.sin(p) * dist, pz + Math.cos(p) * dist)
     this.camera.up.set(0, 1, 0)
     this.camera.lookAt(px, y, pz)
+    // Track the planes to the distance, or depth precision collapses at the
+    // very long throws a narrow FOV needs.
+    this.camera.near = Math.max(0.1, dist * 0.05)
+    this.camera.far = dist * 4
+    this.camera.updateProjectionMatrix()
     this.camera.updateMatrixWorld()
   }
 

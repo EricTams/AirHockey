@@ -6,6 +6,7 @@ import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
 import { buildGroundMesh } from '../world/groundMesh'
+import { Backdrop } from '../world/backdrop'
 import { TILE } from '../core/config'
 
 /** Doc §6.2: a step tweens over 12 frames at 60Hz. */
@@ -13,8 +14,8 @@ const STEP_FRAMES = 12
 /** Frames a direction must be held facing before the step commits. */
 const TURN_GRACE = 4
 
-const MAP_COLS = 24
-const MAP_ROWS = 18
+const MAP_COLS = 20
+const MAP_ROWS = 12
 /** Pure-grass fill cell in the tileset (cols 4-6 × rows 1-3 are all identical). */
 const GRASS_CELL = { col: 4, row: 1 }
 /** Solid dirt from the cliff face, used only to make the tile grid legible. */
@@ -28,14 +29,15 @@ export class OverworldMode implements Mode {
   readonly name = 'overworld'
   private scene = new THREE.Scene()
   private proj = new Projection()
+  private backdrop = new Backdrop()
   private sprites = new THREE.Group()
   private player?: CharacterSprite
 
   // Player state
-  private tx = 12
-  private ty = 9
+  private tx = 10
+  private ty = 7
   private facing: Facing = 'down'
-  private stepFrom: [number, number] = [12, 9]
+  private stepFrom: [number, number] = [10, 7]
   private stepFrames = 0
   private stepsTaken = 0
   private turnGrace = 0
@@ -126,10 +128,13 @@ export class OverworldMode implements Mode {
     this.proj.placeBillboard(this.player.mesh, x, y)
     this.player.mesh.renderOrder = this.proj.sortKey(y)
     this.proj.lookAt(x, y)
+    this.backdrop.update(x, y, this.proj.pitchDeg)
   }
 
   render(): void {
     this.gfx.beginFrame(0x0b0d0a)
+    // Backdrop first, with depth writes off, so the world composites over it.
+    this.backdrop.render(this.gfx.gl)
     this.gfx.gl.render(this.scene, this.proj.camera)
   }
 
@@ -140,6 +145,7 @@ export class OverworldMode implements Mode {
       facing: this.facing,
       steps: this.stepsTaken,
       pitch: `${this.proj.pitchDeg.toFixed(0)}deg`,
+      fov: `${this.proj.fovDeg.toFixed(1)}deg`,
     }
   }
 

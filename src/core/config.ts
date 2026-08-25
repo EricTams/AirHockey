@@ -17,3 +17,12 @@ export const TICK_DT = 1 / TICK_HZ
  * ~35 stands every billboard upright for the 2.5D look; see plan "Camera Rig".
  */
 export const CAMERA_PITCH_DEG = 90
+
+/**
+ * Field of view at full top-down. Near zero is optically orthographic: a
+ * narrow FOV at a long distance has no appreciable convergence, which keeps
+ * the flat view pixel-exact.
+ */
+export const FOV_FLAT_DEG = 1
+/** Field of view at full tilt, where convergence should read as depth. */
+export const FOV_TILTED_DEG = 38
