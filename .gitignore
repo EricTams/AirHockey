@@ -1,0 +1,7 @@
+# Incoming art drops — staging only. Normalized copies live in public/assets/.
+ContentDrop-*/
+
+node_modules/
+dist/
+.DS_Store
+*.log

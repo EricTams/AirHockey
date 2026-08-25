@@ -1,0 +1,19 @@
+/** Virtual framebuffer. Doc §4.1 said 640×360 for 16px tiles; the art is 48px, so 960×540. */
+export const VIRTUAL_W = 960
+export const VIRTUAL_H = 540
+
+/** 1 world unit = 1 tile = 48 source pixels. */
+export const TILE = 48
+
+/** One elevation step = 24px = half a tile (matches the cliff-strip band pitch). */
+export const HEIGHT_STEP = 0.5
+
+/** Fixed logic rate (doc §3). */
+export const TICK_HZ = 60
+export const TICK_DT = 1 / TICK_HZ
+
+/**
+ * Overworld camera pitch in degrees. 90 = flat top-down (v1).
+ * ~35 stands every billboard upright for the 2.5D look; see plan "Camera Rig".
+ */
+export const CAMERA_PITCH_DEG = 90
