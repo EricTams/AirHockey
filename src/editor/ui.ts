@@ -152,7 +152,7 @@ export interface EditorUiHandlers {
   onExit(server: EditorServer): void | Promise<void>
 }
 
-export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServer } {
+export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServer; root: HTMLElement } {
   const server = new EditorServer()
 
   document.head.append(el('style', {}, CSS))
@@ -282,5 +282,5 @@ export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServe
     else void connect()
   }
 
-  return { server }
+  return { server, root }
 }

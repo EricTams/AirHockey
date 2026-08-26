@@ -6,7 +6,7 @@ import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
 import { buildTileLayer } from '../world/tileLayer'
-import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type MapNpc } from '../world/map'
+import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type LayerName, type MapNpc } from '../world/map'
 import type { Tileset } from '../world/tileset'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
@@ -19,7 +19,7 @@ const STEP_FRAMES = 12
 const TURN_GRACE = 4
 
 /** The map the game boots into (doc §10: "the entry map"). */
-const ENTRY_MAP = 'data/maps/overworld.json'
+export const ENTRY_MAP = 'data/maps/overworld.json'
 /** The player's own sprite is a game constant, not map data. */
 const PLAYER_CHARACTER = 'data/characters/character-1.json'
 
@@ -45,8 +45,10 @@ export class OverworldMode implements Mode {
   private player?: CharacterSprite
 
   private map!: GameMap
+  private mapPath = ENTRY_MAP
   private tileset!: Tileset
-  private layers: THREE.Mesh[] = []
+  private sheet!: THREE.Texture
+  private layers = new Map<LayerName, THREE.Mesh>()
   private npcs: NpcSlot[] = []
 
   private tx = 0
@@ -63,8 +65,7 @@ export class OverworldMode implements Mode {
   }
 
   async init(): Promise<void> {
-    const { map, tileset } = await loadMap(ENTRY_MAP)
-    await this.applyMap(map, tileset)
+    await this.reload(ENTRY_MAP)
   }
 
   /**
@@ -74,10 +75,14 @@ export class OverworldMode implements Mode {
    * have been pointed at the designer's own content folder. Loading is the only
    * way an edit becomes visible: the scene is built once from the file.
    */
-  async reload(path = ENTRY_MAP): Promise<void> {
+  async reload(path = this.mapPath): Promise<void> {
     const { map, tileset } = await loadMap(path)
+    this.mapPath = path
     await this.applyMap(map, tileset)
   }
+
+  /** Where the loaded map came from, which is where the editor saves it. */
+  get currentMapPath(): string { return this.mapPath }
 
   /**
    * Build the scene for a map, replacing whatever was there.
@@ -96,16 +101,12 @@ export class OverworldMode implements Mode {
     this.map = map
     this.tileset = tileset
 
-    const sheet = await this.assets.texture(tileset.image, {
+    this.sheet = await this.assets.texture(tileset.image, {
       label: 'TILESET', kind: 'tile', width: tileset.sheetW, height: tileset.sheetH,
     })
     // One merged mesh per layer. Indices come from the file, so the grid is
     // unaffected if the sheet fell back to a placeholder.
-    for (const name of LAYER_NAMES) {
-      const mesh = buildTileLayer(sheet, map, name, tileset)
-      this.layers.push(mesh)
-      this.scene.add(mesh)
-    }
+    this.rebuildLayers()
 
     const inMap = sameMap && keepX < map.width && keepY < map.height
     this.tx = inMap ? keepX : map.playerStart.x
@@ -135,14 +136,35 @@ export class OverworldMode implements Mode {
     this.proj.lookAt(this.tx, this.ty)
   }
 
+  /**
+   * Rebuild layer meshes from the map's tile arrays, which the editor mutates
+   * in place. Naming layers rebuilds only those, so a brush stroke does not
+   * rebuild the two layers it did not touch.
+   *
+   * This is O(cells) per layer. Fine at 20x12; it will want chunking well
+   * before a map is large enough for that to show.
+   */
+  rebuildLayers(only: readonly LayerName[] = LAYER_NAMES): void {
+    for (const name of only) {
+      this.dropLayer(name)
+      const mesh = buildTileLayer(this.sheet, this.map, name, this.tileset)
+      this.layers.set(name, mesh)
+      this.scene.add(mesh)
+    }
+  }
+
+  private dropLayer(name: LayerName): void {
+    const old = this.layers.get(name)
+    if (!old) return
+    this.scene.remove(old)
+    old.geometry.dispose()
+    ;(old.material as THREE.Material).dispose()
+    this.layers.delete(name)
+  }
+
   /** Drop the meshes and sprites of the map being replaced. */
   private disposeScene(): void {
-    for (const mesh of this.layers) {
-      this.scene.remove(mesh)
-      mesh.geometry.dispose()
-      ;(mesh.material as THREE.Material).dispose()
-    }
-    this.layers = []
+    for (const name of [...this.layers.keys()]) this.dropLayer(name)
     // Textures belong to Assets and are shared; CharacterSprite.dispose drops
     // only the geometry and material it owns.
     this.player?.dispose()

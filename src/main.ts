@@ -9,6 +9,7 @@ import { OverworldMode } from './modes/overworld'
 import { DialogueMode } from './modes/dialogue'
 import { BattleMode } from './modes/battle/battle'
 import { mountEditorUi } from './editor/ui'
+import { Editor } from './editor/editor'
 import { VIRTUAL_W, VIRTUAL_H, TICK_DT } from './core/config'
 import { fetchJson } from './core/paths'
 import type { BattleConfig } from './modes/battle/physics'
@@ -86,6 +87,10 @@ loop.start()
  * logic ticks run, so nothing walks, animates, or reads input behind the
  * editor's back.
  */
+let session: Editor | undefined
+/** Whether content reads have already been pointed at the helper this session. */
+let routed = false
+
 const editor = mountEditorUi({
   async onEnter(server) {
     // Editing acts on the overworld, so settle any pending mode change with a
@@ -100,23 +105,33 @@ const editor = mountEditorUi({
     // Point content reads at the designer's own folder, then rebuild the world
     // from it. Anything they had already edited was loaded from the site during
     // boot, so those textures are stale and have to be dropped by hand.
-    await server.install()
-    const edited = server.editedPaths ?? new Set<string>()
-    for (const path of edited) assets.invalidate(path)
-    await overworld.reload()
+    //
+    // Only on the first entry: re-entering must not reload the map out from
+    // under edits the designer made, left the editor to walk around, and came
+    // back to finish.
+    if (!routed) {
+      await server.install()
+      for (const path of server.editedPaths ?? []) assets.invalidate(path)
+      await overworld.reload()
+      routed = true
+    }
 
+    session ??= new Editor({ gfx, assets, overworld }, editor.root)
+    await session.open(server)
+
+    const edited = server.editedPaths?.size ?? 0
     console.log('[editor] editing against', server.origin,
-      `- game paused, ${edited.size} edited file(s)`)
+      `- game paused, ${edited} edited file(s)`)
   },
-  async onExit(server) {
+  onExit() {
+    // Content stays routed at the helper, so leaving the editor drops the
+    // designer into the world they just built rather than back into the one the
+    // site shipped. The scene already holds every edit, saved or not, so there
+    // is nothing to reload.
+    session?.close()
     input.reset()   // drop anything held while the editor had focus
-    const edited = server.editedPaths ?? new Set<string>()
-    server.uninstall()
-    // Same problem in reverse: the scene is holding the designer's content.
-    for (const path of edited) assets.invalidate(path)
-    await overworld.reload()
     loop.setPaused(false)
-    console.log('[editor] resumed')
+    console.log('[editor] resumed, playing your content')
   },
 })
 
@@ -129,6 +144,7 @@ console.log('[airhockey] booted', {
 if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__game = {
     gfx, input, modes, loop, debug, assets, overworld, dialogue, battle, editor,
+    get session() { return session },
     /** Jump straight into any arena, skipping the walk and the dialogue. */
     async startBattle(id = 'blorb') {
       const config = await fetchJson<BattleConfig>(`data/battles/${id}.json`)

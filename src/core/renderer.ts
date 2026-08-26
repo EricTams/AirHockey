@@ -79,6 +79,9 @@ export class Renderer {
 
   get integerScale(): number { return this.scale }
 
+  /** The canvas itself, for anything that needs to bind its own pointer events. */
+  get canvas(): HTMLCanvasElement { return this.gl.domElement }
+
   /**
    * Map a client-space point into the virtual framebuffer, accounting for the
    * integer upscale and the letterbox. Returns undefined outside the image.
