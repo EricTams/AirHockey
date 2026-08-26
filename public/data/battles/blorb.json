@@ -2,7 +2,7 @@
   "id": "blorb",
   "opponent": {
     "name": "Blorb",
-    "sheet": "/assets/characters/character-2-idle.json",
+    "sheet": "assets/characters/character-2-idle.json",
     "ai": "standard",
     "roamDepth": 0.45,
     "aggression": 0.5,

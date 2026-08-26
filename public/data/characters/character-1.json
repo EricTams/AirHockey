@@ -4,9 +4,9 @@
   "idleFrame": 0,
   "framesPerStep": 2,
   "directions": {
-    "down":  "/assets/characters/character-1-down.json",
-    "left":  "/assets/characters/character-1-left.json",
-    "right": "/assets/characters/character-1-right.json",
-    "up":    "/assets/characters/character-1-up.json"
+    "down":  "assets/characters/character-1-down.json",
+    "left":  "assets/characters/character-1-left.json",
+    "right": "assets/characters/character-1-right.json",
+    "up":    "assets/characters/character-1-up.json"
   }
 }

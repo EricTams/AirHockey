@@ -4,6 +4,6 @@
   "idleFrame": 0,
   "framesPerStep": 2,
   "directions": {
-    "*": "/assets/characters/character-2-idle.json"
+    "*": "assets/characters/character-2-idle.json"
   }
 }

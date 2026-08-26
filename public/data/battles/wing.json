@@ -2,7 +2,7 @@
   "id": "wing",
   "opponent": {
     "name": "Gravy",
-    "sheet": "/assets/characters/character-2-idle.json",
+    "sheet": "assets/characters/character-2-idle.json",
     "ai": "inert",
     "tint": 16757370
   },

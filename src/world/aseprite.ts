@@ -1,5 +1,6 @@
 import type * as THREE from 'three'
 import type { Assets } from '../core/assets'
+import { fetchJson } from '../core/paths'
 
 /** One frame of an Aseprite export, with UVs precomputed for the atlas. */
 export interface Frame {
@@ -35,17 +36,15 @@ interface AsepriteJson {
  * `meta.image`: the exporter records the original filename, which in this
  * project's drops contains spaces that the import step strips.
  */
-export async function loadAseprite(jsonUrl: string, assets: Assets): Promise<SpriteSheet> {
-  const res = await fetch(jsonUrl)
-  if (!res.ok) throw new Error(`aseprite json ${jsonUrl}: ${res.status}`)
-  const data = (await res.json()) as AsepriteJson
+export async function loadAseprite(jsonPath: string, assets: Assets): Promise<SpriteSheet> {
+  const data = await fetchJson<AsepriteJson>(jsonPath)
 
-  const pngUrl = jsonUrl.replace(/\.json$/, '.png')
-  const texture = await assets.texture(pngUrl, { label: 'SHEET', kind: 'character' })
+  const pngPath = jsonPath.replace(/\.json$/, '.png')
+  const texture = await assets.texture(pngPath, { label: 'SHEET', kind: 'character' })
 
   // Aseprite exports `frames` as an array or as a filename-keyed object.
   const raw = Array.isArray(data.frames) ? data.frames : Object.values(data.frames)
-  if (raw.length === 0) throw new Error(`aseprite json ${jsonUrl}: no frames`)
+  if (raw.length === 0) throw new Error(`aseprite json ${jsonPath}: no frames`)
 
   const img = texture.image as { width?: number; height?: number } | undefined
   const width = data.meta?.size?.w ?? img?.width ?? 1

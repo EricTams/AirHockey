@@ -8,6 +8,7 @@ import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../w
 import { buildGroundMesh } from '../world/groundMesh'
 import { Backdrop } from '../world/backdrop'
 import { TILE } from '../core/config'
+import { fetchJson } from '../core/paths'
 import type { DialogueScript } from './dialogue'
 import type { BattleConfig } from './battle/physics'
 
@@ -28,11 +29,11 @@ const NPCS: {
   id: string; tile: [number, number]; dialogue: string; battle: string; tint: number
 }[] = [
   { id: 'blorb',   tile: [6, 4],  tint: 0xffffff,
-    dialogue: '/data/dialogue/blorb.json',   battle: '/data/battles/blorb.json' },
+    dialogue: 'data/dialogue/blorb.json',   battle: 'data/battles/blorb.json' },
   { id: 'wing',    tile: [10, 4], tint: 0xffb27a,
-    dialogue: '/data/dialogue/wing.json',    battle: '/data/battles/wing.json' },
+    dialogue: 'data/dialogue/wing.json',    battle: 'data/battles/wing.json' },
   { id: 'plumber', tile: [14, 4], tint: 0x8fe6a4,
-    dialogue: '/data/dialogue/plumber.json', battle: '/data/battles/plumber.json' },
+    dialogue: 'data/dialogue/plumber.json', battle: 'data/battles/plumber.json' },
 ]
 
 const DIRS: Record<Facing, [number, number]> = {
@@ -70,7 +71,7 @@ export class OverworldMode implements Mode {
   }
 
   async init(): Promise<void> {
-    const sheet = await this.assets.texture('/assets/terrain/tileset-tiles.png', {
+    const sheet = await this.assets.texture('assets/terrain/tileset-tiles.png', {
       label: 'TILESET', kind: 'tile', width: 512, height: 464,
     })
     const img = sheet.image as { width?: number; height?: number } | undefined
@@ -83,11 +84,11 @@ export class OverworldMode implements Mode {
       (tx, ty) => ((tx + ty) % 2 === 0 ? GRASS_CELL : DIRT_CELL),
       TILE, img?.width ?? 512, img?.height ?? 464))
 
-    const def = (await (await fetch('/data/characters/character-1.json')).json()) as CharacterDef
+    const def = await fetchJson<CharacterDef>('data/characters/character-1.json')
     this.player = await CharacterSprite.load(def, this.assets)
     this.sprites.add(this.player.mesh)
 
-    const npcDef = (await (await fetch('/data/characters/character-2.json')).json()) as CharacterDef
+    const npcDef = await fetchJson<CharacterDef>('data/characters/character-2.json')
     await Promise.all(NPCS.map(async (spec, i) => {
       const slot = this.npcs[i]!
       // All three share Character 2's sheet; it is the only NPC art in the drop.
@@ -95,8 +96,8 @@ export class OverworldMode implements Mode {
       slot.sprite.setTint(spec.tint)
       slot.sprite.setFrame(slot.facing, 0)
       this.sprites.add(slot.sprite.mesh)
-      slot.script = (await (await fetch(spec.dialogue)).json()) as DialogueScript
-      slot.battle = (await (await fetch(spec.battle)).json()) as BattleConfig
+      slot.script = await fetchJson<DialogueScript>(spec.dialogue)
+      slot.battle = await fetchJson<BattleConfig>(spec.battle)
     }))
   }
 

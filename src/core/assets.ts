@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { makePlaceholderTexture, type PlaceholderOpts } from '../world/placeholder'
 import { findMissing } from '../world/missingArt'
+import { assetUrl } from './paths'
 
 /**
  * Texture cache with a placeholder fallback: a missing or broken file yields a
@@ -15,19 +16,23 @@ export class Assets {
   get placeholders(): string[] { return [...this.substituted].sort() }
 
   /**
-   * Load `url` as a pixel-art texture. On failure, fall back to a placeholder —
-   * from the MISSING_ART manifest if the path is a known gap, otherwise a
-   * generic square derived from `fallback`.
+   * Load a project-relative path as a pixel-art texture. On failure, fall back
+   * to a placeholder — from the MISSING_ART manifest if the path is a known
+   * gap, otherwise a generic square derived from `fallback`.
+   *
+   * Cached and looked up by the logical path, so the manifest keys stay stable
+   * wherever the site is hosted.
    */
-  async texture(url: string, fallback?: Partial<PlaceholderOpts>): Promise<THREE.Texture> {
+  async texture(path: string, fallback?: Partial<PlaceholderOpts>): Promise<THREE.Texture> {
+    const url = path
     const hit = this.cache.get(url)
     if (hit) return hit
 
     let tex: THREE.Texture
     try {
-      tex = await this.loadImage(url)
+      tex = await this.loadImage(assetUrl(path))
     } catch {
-      const known = findMissing(url)
+      const known = findMissing(path)
       tex = makePlaceholderTexture({
         width: known?.width ?? fallback?.width ?? 48,
         height: known?.height ?? fallback?.height ?? 48,

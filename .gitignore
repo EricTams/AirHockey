@@ -1,10 +1,29 @@
-# Incoming art drops — staging only. Normalized copies live in public/assets/.
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Incoming art drops. Staging only — normalized copies live in public/assets/,
+# and tools/import-assets.sh does the copying.
 ContentDrop-*/
 
-node_modules/
-dist/
-.DS_Store
-*.log
-
-# Local art inspection log (dev tooling; contains copies of drop art)
+# Local art inspection log (dev tooling; holds copies of drop art)
 .artlog/
+
+# Caches and coverage
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch
+*.bak
+*.local
+*.log

@@ -2,7 +2,7 @@
   "id": "plumber",
   "opponent": {
     "name": "Sprocket",
-    "sheet": "/assets/characters/character-2-idle.json",
+    "sheet": "assets/characters/character-2-idle.json",
     "ai": "standard",
     "roamDepth": 0.55,
     "aggression": 0.7,
