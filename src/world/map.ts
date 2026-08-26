@@ -1,4 +1,5 @@
 import { fetchJson } from '../core/paths'
+import { parseEvent, type MapEvent } from './event'
 import { parseTileset, isTileIndex, EMPTY_TILE, type Tileset } from './tileset'
 import type { Facing } from './character'
 
@@ -76,6 +77,8 @@ export interface GameMap {
   props: MapProp[]
   /** Tiles that lead to other maps. Optional; absent means none. */
   warps: MapWarp[]
+  /** Events standing on the map. Optional; absent means none. */
+  events: MapEvent[]
 }
 
 /** A map paired with the resolved tileset its indices refer to. */
@@ -192,7 +195,25 @@ export function parseMap(raw: unknown, tileset: Tileset, path = 'map'): GameMap 
     }
   })
 
-  return { ...(m as GameMap), width: w, height: h, npcs, props, warps }
+  const rawEvents = (m as { events?: unknown }).events ?? []
+  if (!Array.isArray(rawEvents)) fail(path, '"events" must be an array')
+  const seenEvents = new Set<string>()
+  const events = rawEvents.map((raw, i) => {
+    const ev = parseEvent(raw, `${path}: event[${i}]`)
+    if (seenEvents.has(ev.id)) fail(`${path}: event[${i}]`, `duplicate id "${ev.id}"`)
+    seenEvents.add(ev.id)
+    if (!inRange(ev.x, w) || !inRange(ev.y, h)) {
+      fail(`${path}: event[${i}]`, `tile ${ev.x},${ev.y} is outside ${w}x${h}`)
+    }
+    return ev
+  })
+
+  return { ...(m as GameMap), width: w, height: h, npcs, props, warps, events }
+}
+
+/** The event standing on a tile, if any. */
+export function eventAt(map: GameMap, x: number, y: number): MapEvent | undefined {
+  return map.events.find((e) => e.x === x && e.y === y)
 }
 
 /** The warp on a tile, if any. */

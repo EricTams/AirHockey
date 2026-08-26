@@ -20,6 +20,7 @@ import { TilesetEditor } from './tilesetEditor'
 import { MapPicker } from './mapPicker'
 import type { ModeManager } from '../core/mode'
 import type { DialogueMode } from '../modes/dialogue'
+import type { GameState } from '../world/gameState'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
 import type { Tileset } from '../world/tileset'
 
@@ -54,6 +55,7 @@ export interface EditorHost {
   overworld: OverworldMode
   modes: ModeManager
   dialogue: DialogueMode
+  state: GameState
 }
 
 /** The panels the dock can show. Entities and events join this later. */

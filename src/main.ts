@@ -4,6 +4,7 @@ import { ModeManager } from './core/mode'
 import { Loop } from './core/loop'
 import { Assets } from './core/assets'
 import { DebugOverlay } from './core/debugOverlay'
+import { GameState } from './world/gameState'
 import { GalleryMode } from './modes/gallery'
 import { OverworldMode } from './modes/overworld'
 import { DialogueMode } from './modes/dialogue'
@@ -20,7 +21,8 @@ const assets = new Assets()
 const modes = new ModeManager()
 const debug = new DebugOverlay()
 
-const overworld = new OverworldMode(gfx, input, assets)
+const state = new GameState()
+const overworld = new OverworldMode(gfx, input, assets, state)
 await overworld.init()
 
 // Dialogue draws over a frozen overworld (doc §7.2), so it renders it directly.
@@ -122,7 +124,7 @@ const editor = mountEditorUi({
       routed = true
     }
 
-    session ??= new Editor({ gfx, assets, overworld, modes, dialogue }, editor.root)
+    session ??= new Editor({ gfx, assets, overworld, modes, dialogue, state }, editor.root)
     await session.open(server)
 
     const edited = server.editedPaths?.size ?? 0
@@ -150,7 +152,7 @@ console.log('[airhockey] booted', {
 
 if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__game = {
-    gfx, input, modes, loop, debug, assets, overworld, dialogue, battle, editor,
+    gfx, input, modes, loop, debug, assets, state, overworld, dialogue, battle, editor,
     get session() { return session },
     /** Jump straight into any arena, skipping the walk and the dialogue. */
     async startBattle(id = 'blorb') {

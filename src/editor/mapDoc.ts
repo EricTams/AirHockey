@@ -1,4 +1,5 @@
 import { LAYER_NAMES, type GameMap, type LayerName, type MapNpc, type MapProp, type MapWarp } from '../world/map'
+import type { MapEvent } from '../world/event'
 import { EMPTY_TILE } from '../world/tileset'
 
 /**
@@ -45,6 +46,7 @@ export interface MapState {
   npcs: MapNpc[]
   props: MapProp[]
   warps: MapWarp[]
+  events: MapEvent[]
 }
 
 export interface StateEdit {
@@ -252,6 +254,7 @@ function cloneMap(map: GameMap): GameMap {
     npcs: map.npcs.map((n) => ({ ...n })),
     props: map.props.map((p) => ({ ...p })),
     warps: map.warps.map((w) => ({ ...w })),
+    events: structuredClone(map.events),
   }
 }
 
@@ -272,6 +275,7 @@ function restoreShape(map: GameMap, next: GameMap): void {
     npcs: next.npcs,
     props: next.props,
     warps: next.warps,
+    events: next.events,
   })
 }
 
@@ -283,6 +287,9 @@ function snapshotState(map: GameMap): MapState {
     npcs: map.npcs.map((n) => ({ ...n })),
     props: map.props.map((p) => ({ ...p })),
     warps: map.warps.map((w) => ({ ...w })),
+    // Events nest arbitrarily deep, so a shallow copy per entry would leave the
+    // undo stack sharing command lists with the live map.
+    events: structuredClone(map.events),
   }
 }
 
@@ -294,6 +301,7 @@ function restoreState(map: GameMap, state: MapState): void {
   map.npcs.splice(0, map.npcs.length, ...state.npcs.map((n) => ({ ...n })))
   map.props.splice(0, map.props.length, ...state.props.map((p) => ({ ...p })))
   map.warps.splice(0, map.warps.length, ...state.warps.map((w) => ({ ...w })))
+  map.events.splice(0, map.events.length, ...structuredClone(state.events))
 }
 
 function touchedBy(stroke: Stroke): Touched {
@@ -358,6 +366,7 @@ export function blankMap(
     npcs: [],
     props: [],
     warps: [],
+    events: [],
   }
 }
 
@@ -406,5 +415,6 @@ export function resizeMap(map: GameMap, width: number, height: number, fill: num
     npcs: map.npcs.filter(inside).map((n) => ({ ...n })),
     props: map.props.filter(inside).map((p) => ({ ...p })),
     warps: map.warps.filter(inside).map((w) => ({ ...w })),
+    events: structuredClone(map.events.filter(inside)),
   }
 }

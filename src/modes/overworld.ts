@@ -6,7 +6,13 @@ import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
 import { buildTileLayer } from '../world/tileLayer'
-import { LAYER_NAMES, loadMap, blockedAt, warpAt, type GameMap, type LayerName, type MapNpc, type MapProp, type MapWarp } from '../world/map'
+import {
+  LAYER_NAMES, loadMap, blockedAt, warpAt, eventAt,
+  type GameMap, type LayerName, type MapNpc, type MapProp, type MapWarp,
+} from '../world/map'
+import type { MapEvent } from '../world/event'
+import type { GameState } from '../world/gameState'
+import { EventRunner, type Request } from '../world/eventRunner'
 import { propById, type PropDef, type Tileset } from '../world/tileset'
 import { buildProp, placeProp } from '../world/prop'
 import { Backdrop } from '../world/backdrop'
@@ -26,6 +32,28 @@ const PLAYER_CHARACTER = 'data/characters/character-1.json'
 
 const DIRS: Record<Facing, [number, number]> = {
   up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+}
+
+/**
+ * An event as the world sees it: which of its pages is live, the sprite that
+ * page asks for, and whatever walking it has been told to do.
+ */
+interface EventSlot {
+  def: MapEvent
+  /** Index of the live page, or -1 when no page's conditions hold. */
+  page: number
+  /** The page a trigger has already fired for, so auto and parallel run once. */
+  firedPage: number
+  sprite?: CharacterSprite
+  facing: Facing
+  tile: [number, number]
+  stepFrom: [number, number]
+  stepFrames: number
+  walking: Facing[]
+  /** A walk was asked for and its runner is owed an answer when it lands. */
+  pendingWalk?: boolean
+  /** A parallel page's own runner. The foreground one is held by the mode. */
+  runner?: EventRunner
 }
 
 interface PropSlot {
@@ -58,6 +86,14 @@ export class OverworldMode implements Mode {
   private layers = new Map<LayerName, THREE.Mesh>()
   private npcs: NpcSlot[] = []
   private props: PropSlot[] = []
+  private events: EventSlot[] = []
+  /**
+   * The event holding the player still. Talk, touch and auto pages run here,
+   * one at a time; parallel pages run in their own runners alongside.
+   */
+  private foreground?: EventRunner
+  private foregroundSlot?: EventSlot
+  private lastStateRevision = -1
 
   private tx = 0
   private ty = 0
@@ -69,7 +105,12 @@ export class OverworldMode implements Mode {
   /** Set while a map is loading, which suspends the sim. */
   private traveling = false
 
-  constructor(private gfx: Renderer, private input: Input, private assets: Assets) {
+  constructor(
+    private gfx: Renderer,
+    private input: Input,
+    private assets: Assets,
+    private state: GameState,
+  ) {
     this.sprites.renderOrder = 10
     this.scene.add(this.sprites)
   }
@@ -188,6 +229,18 @@ export class OverworldMode implements Mode {
       if (slot.def.battle) slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
     }))
 
+    this.events = map.events.map((def): EventSlot => ({
+      def,
+      page: -1,
+      firedPage: -1,
+      facing: 'down',
+      tile: [def.x, def.y],
+      stepFrom: [def.x, def.y],
+      stepFrames: 0,
+      walking: [],
+    }))
+    const events = this.refreshEventPages(true)
+
     // Props share the tileset sheet, which applyMap has already loaded.
     for (const p of map.props) {
       const shape = propById(this.tileset, p.prop)
@@ -198,8 +251,246 @@ export class OverworldMode implements Mode {
       this.props.push({ def: p, shape, mesh })
     }
 
-    await npcs
+    await Promise.all([npcs, events])
     this.placeEntities()
+  }
+
+  // --- Events --------------------------------------------------------------
+
+  /**
+   * Work out which page of each event is live, and load the sprite it asks for.
+   *
+   * Pages are an if/else chain read top to bottom: the first whose conditions
+   * all hold wins. Re-evaluated whenever the game state changes, which is what
+   * makes a guard step aside the moment the flag that moved them is set.
+   */
+  private refreshEventPages(force = false): Promise<void> {
+    this.lastStateRevision = this.state.revision
+    const work: Promise<void>[] = []
+
+    for (const slot of this.events) {
+      const next = slot.def.pages.findIndex((p) => this.state.testAll(p.when))
+      if (next === slot.page && !force) continue
+      slot.page = next
+      // A page change re-arms auto and parallel: becoming live is the trigger.
+      slot.firedPage = -1
+      slot.runner?.cancel()
+      slot.runner = undefined
+      work.push(this.dressEvent(slot))
+    }
+    return Promise.all(work).then(() => undefined)
+  }
+
+  /** Give an event the sprite its live page asks for, or none. */
+  private async dressEvent(slot: EventSlot): Promise<void> {
+    const look = slot.def.pages[slot.page]?.look
+    if (!look) {
+      slot.sprite?.mesh.removeFromParent()
+      slot.sprite?.dispose()
+      slot.sprite = undefined
+      return
+    }
+    if (slot.sprite) {
+      slot.sprite.mesh.removeFromParent()
+      slot.sprite.dispose()
+    }
+    const def = await fetchJson<CharacterDef>(look.character)
+    const sprite = await CharacterSprite.load(def, this.assets)
+    if (look.tint !== undefined) sprite.setTint(look.tint)
+    slot.facing = look.facing
+    sprite.setFrame(slot.facing, def.idleFrame)
+    slot.sprite = sprite
+    this.sprites.add(sprite.mesh)
+  }
+
+  private page(slot: EventSlot) {
+    return slot.def.pages[slot.page]
+  }
+
+  /** Start an event's live page in the foreground, holding the player still. */
+  private startForeground(slot: EventSlot): boolean {
+    const page = this.page(slot)
+    if (!page || this.foreground) return false
+    slot.firedPage = slot.page
+    if (page.do.length === 0) return false
+    this.foreground = new EventRunner(slot.def.id, page.do, this.state)
+    this.foregroundSlot = slot
+    return true
+  }
+
+  /**
+   * Advance the foreground event and every parallel one.
+   *
+   * Returns true while the foreground event is running, which is what suspends
+   * the player: an event that is talking should not also be walked away from.
+   */
+  private tickEvents(): boolean {
+    if (this.state.revision !== this.lastStateRevision) void this.refreshEventPages()
+
+    for (const slot of this.events) {
+      const page = this.page(slot)
+      if (!page) continue
+      if (page.trigger === 'parallel' && slot.firedPage !== slot.page) {
+        slot.firedPage = slot.page
+        if (page.do.length > 0) slot.runner = new EventRunner(slot.def.id, page.do, this.state)
+      }
+      if (slot.runner) {
+        const step = slot.runner.step()
+        if (step.kind === 'suspend') this.serveParallel(slot, step.request)
+        if (slot.runner.isDone) slot.runner = undefined
+      }
+    }
+
+    // Auto pages run as soon as they become live, but only when nothing else
+    // has the floor.
+    if (!this.foreground) {
+      for (const slot of this.events) {
+        const page = this.page(slot)
+        if (page?.trigger === 'auto' && slot.firedPage !== slot.page) {
+          if (this.startForeground(slot)) break
+          slot.firedPage = slot.page
+        }
+      }
+    }
+
+    const runner = this.foreground
+    if (!runner) return false
+    if (runner.isSuspended) return true
+
+    const step = runner.step()
+    if (step.kind === 'suspend') {
+      this.serve(step.request)
+      return true
+    }
+    if (runner.isDone) {
+      this.foreground = undefined
+      this.foregroundSlot = undefined
+      return false
+    }
+    return true
+  }
+
+  /**
+   * Carry out a foreground request. Anything that changes mode leaves the
+   * runner suspended; `enter` resumes it when the game comes back.
+   */
+  private serve(request: Request): void {
+    const slot = this.foregroundSlot
+    switch (request.kind) {
+      case 'say':
+        this.onSwitch?.('dialogue', {
+          script: { id: `${slot?.def.id ?? 'event'}:inline`, lines: request.lines },
+          next: { mode: 'overworld' },
+        })
+        return
+      case 'script':
+        void fetchJson(request.path).then((raw) => {
+          this.onSwitch?.('dialogue', {
+            script: parseDialogue(raw, request.path),
+            next: { mode: 'overworld' },
+          })
+        }).catch((err: Error) => this.abortEvent(request.path, err))
+        return
+      case 'battle':
+        void fetchJson<BattleConfig>(request.path).then((config) => {
+          this.onSwitch?.('battle', { config, returnTo: 'overworld' })
+        }).catch((err: Error) => this.abortEvent(request.path, err))
+        return
+      case 'warp':
+        void this.travel({
+          id: `${slot?.def.id ?? 'event'}:warp`,
+          x: 0, y: 0,
+          to: request.target.to,
+          toX: request.target.x,
+          toY: request.target.y,
+          facing: request.target.facing,
+        })
+        return
+      case 'face':
+        if (slot) {
+          slot.facing = request.facing
+          slot.sprite?.setFrame(slot.facing, slot.sprite.def.idleFrame)
+        }
+        this.foreground?.resume()
+        return
+      case 'walk':
+        if (slot) slot.walking = [...request.steps]
+        else this.foreground?.resume()
+        return
+    }
+  }
+
+  /** A parallel event gets the same treatment, minus anything that takes over
+   *  the screen: it is running while the player walks, so it must not. */
+  private serveParallel(slot: EventSlot, request: Request): void {
+    switch (request.kind) {
+      case 'face':
+        slot.facing = request.facing
+        slot.sprite?.setFrame(slot.facing, slot.sprite.def.idleFrame)
+        slot.runner?.resume()
+        return
+      case 'walk':
+        slot.walking = [...request.steps]
+        return
+      default:
+        // Dialogue, battles and warps all take the screen. Refusing them here
+        // is clearer than letting one interrupt the player mid-step.
+        console.warn(
+          `[overworld] event "${slot.def.id}" is a parallel page and cannot "${request.kind}"`,
+        )
+        slot.runner?.resume()
+    }
+  }
+
+  private abortEvent(what: string, err: Error): void {
+    console.error(`[overworld] event stopped: ${what}:`, err)
+    this.foreground?.cancel()
+    this.foreground = undefined
+    this.foregroundSlot = undefined
+  }
+
+  /** Move events that are walking, resuming their runner when they arrive. */
+  private stepEventWalks(): void {
+    for (const slot of this.events) {
+      if (slot.stepFrames > 0) {
+        slot.stepFrames--
+        if (slot.stepFrames > 0) continue
+      }
+      if (slot.walking.length === 0) {
+        // Arrived, and the runner that asked for it is owed an answer.
+        const runner = slot.runner ?? (this.foregroundSlot === slot ? this.foreground : undefined)
+        if (runner?.isSuspended && slot.stepFrames === 0 && slot.pendingWalk) {
+          slot.pendingWalk = false
+          runner.resume()
+        }
+        continue
+      }
+      const dir = slot.walking.shift()!
+      const [dx, dy] = DIRS[dir]
+      const nx = slot.tile[0] + dx
+      const ny = slot.tile[1] + dy
+      slot.facing = dir
+      slot.pendingWalk = true
+      if (!blockedAt(this.map, nx, ny)) {
+        slot.stepFrom = [...slot.tile] as [number, number]
+        slot.tile = [nx, ny]
+        slot.stepFrames = STEP_FRAMES
+      }
+    }
+  }
+
+  /** Fire a talk trigger on the tile the player faces. Returns true if one ran. */
+  private tryTalkEvent(fx: number, fy: number): boolean {
+    const found = eventAt(this.map, fx, fy)
+    const slot = found && this.events.find((s) => s.def.id === found.id)
+    const page = slot && this.page(slot)
+    if (!slot || !page || page.trigger !== 'talk') return false
+
+    // Turn to face the player before speaking, as NPCs do.
+    const opposite: Record<Facing, Facing> = { up: 'down', down: 'up', left: 'right', right: 'left' }
+    slot.facing = opposite[this.facing]
+    slot.sprite?.setFrame(slot.facing, slot.sprite.def.idleFrame)
+    return this.startForeground(slot)
   }
 
   /**
@@ -223,6 +514,16 @@ export class OverworldMode implements Mode {
       this.proj.placeBillboard(npc.sprite.mesh, npc.tile[0], npc.tile[1])
       npc.sprite.mesh.renderOrder = this.proj.sortKey(npc.tile[1])
     }
+    for (const slot of this.events) {
+      if (!slot.sprite) continue
+      // Interpolated like the player, so a walking event tweens rather than
+      // jumping a whole tile at a time.
+      const t = slot.stepFrames > 0 ? 1 - slot.stepFrames / STEP_FRAMES : 1
+      const ex = slot.stepFrom[0] + (slot.tile[0] - slot.stepFrom[0]) * t
+      const ey = slot.stepFrom[1] + (slot.tile[1] - slot.stepFrom[1]) * t
+      this.proj.placeBillboard(slot.sprite.mesh, ex, ey)
+      slot.sprite.mesh.renderOrder = this.proj.sortKey(ey)
+    }
     for (const prop of this.props) {
       placeProp(this.proj, prop.mesh, prop.shape, prop.def.x, prop.def.y)
     }
@@ -234,6 +535,15 @@ export class OverworldMode implements Mode {
       npc.sprite?.mesh.removeFromParent()
       npc.sprite?.dispose()
     }
+    for (const slot of this.events) {
+      slot.runner?.cancel()
+      slot.sprite?.mesh.removeFromParent()
+      slot.sprite?.dispose()
+    }
+    this.events = []
+    this.foreground?.cancel()
+    this.foreground = undefined
+    this.foregroundSlot = undefined
     for (const prop of this.props) {
       prop.mesh.removeFromParent()
       prop.mesh.geometry.dispose()
@@ -291,14 +601,33 @@ export class OverworldMode implements Mode {
   /** For the editor's camera control; nothing drives it while paused. */
   get projection(): Projection { return this.proj }
 
-  enter(): void {}
+  /**
+   * Coming back from dialogue or a battle. A suspended foreground event is owed
+   * an answer, and for a battle that answer is who won — which is what makes
+   * `won:`/`lost:` branches work.
+   */
+  enter(payload?: unknown): void {
+    const p = payload as { battleWon?: boolean } | undefined
+    if (this.foreground?.isSuspended) this.foreground.resume({ won: p?.battleWon })
+  }
+
   exit(): void {}
 
   private blocked(tx: number, ty: number): boolean {
     // Terrain passability is its own grid (doc §6.1); NPCs occupy their tile
     // on top of it (doc §6.2).
     if (blockedAt(this.map, tx, ty)) return true
-    return this.npcs.some((n) => n.tile[0] === tx && n.tile[1] === ty)
+    if (this.npcs.some((n) => n.tile[0] === tx && n.tile[1] === ty)) return true
+    // An event blocks only while a page that says so is the live one, which is
+    // how a door opens without the collision grid changing.
+    return this.events.some((s) =>
+      s.tile[0] === tx && s.tile[1] === ty && this.page(s)?.blocks === true)
+  }
+
+  /** Fire a touch page under the player, if there is one. */
+  private tryTouchEvent(): void {
+    const slot = this.events.find((s) => s.tile[0] === this.tx && s.tile[1] === this.ty)
+    if (slot && this.page(slot)?.trigger === 'touch') this.startForeground(slot)
   }
 
   /** Doc §6.4: interact acts on the tile the player faces. */
@@ -306,6 +635,10 @@ export class OverworldMode implements Mode {
     const [dx, dy] = DIRS[this.facing]
     const fx = this.tx + dx
     const fy = this.ty + dy
+    // Events first: they are the general mechanism, and an NPC is the special
+    // case kept working for maps written before events existed.
+    if (this.tryTalkEvent(fx, fy)) return true
+
     const npc = this.npcs.find((n) => n.tile[0] === fx && n.tile[1] === fy)
     if (!npc?.script) return false
 
@@ -339,7 +672,12 @@ export class OverworldMode implements Mode {
   update(_dt: number): void {
     if (!this.player || this.traveling) return
 
-    if (this.stepFrames === 0 && this.input.pressed('interact') && this.tryInteract()) return
+    this.stepEventWalks()
+    // An event with the floor holds the player still. Movement input is not
+    // buffered through it: whatever was held during a conversation is let go of.
+    const busy = this.tickEvents()
+
+    if (!busy && this.stepFrames === 0 && this.input.pressed('interact') && this.tryInteract()) return
 
     if (this.stepFrames > 0) {
       // Mid-step: run out the tween. Input is buffered by being re-read on
@@ -351,7 +689,12 @@ export class OverworldMode implements Mode {
         // steps onto one completes first.
         const warp = warpAt(this.map, this.tx, this.ty)
         if (warp) { void this.travel(warp); return }
+        // Doc: a touch page fires on arrival, so the step that lands on it
+        // completes first and the player is standing where the event is.
+        this.tryTouchEvent()
       }
+    } else if (busy) {
+      this.turnGrace = 0
     } else {
       const want = this.pressedDir()
       if (!want) {

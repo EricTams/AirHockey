@@ -1,4 +1,5 @@
 import { LAYER_NAMES, type GameMap, type MapNpc, type MapProp, type MapWarp } from '../world/map'
+import type { MapEvent } from '../world/event'
 
 /**
  * Serialise a map the way a person would have written it.
@@ -43,9 +44,11 @@ export function serializeMap(map: GameMap): string {
   // no warps still looks like the hand-authored one.
   const hasProps = map.props.length > 0
   const hasWarps = map.warps.length > 0
-  out.push(...block('npcs', map.npcs.map(npcLines), hasProps || hasWarps))
-  if (hasProps) out.push(...block('props', map.props.map(propLines), hasWarps))
-  if (hasWarps) out.push(...block('warps', map.warps.map(warpLines), false))
+  const hasEvents = map.events.length > 0
+  out.push(...block('npcs', map.npcs.map(npcLines), hasProps || hasWarps || hasEvents))
+  if (hasProps) out.push(...block('props', map.props.map(propLines), hasWarps || hasEvents))
+  if (hasWarps) out.push(...block('warps', map.warps.map(warpLines), hasEvents))
+  if (hasEvents) out.push(...eventBlock(map.events))
 
   out.push('}')
   return out.join('\n') + '\n'
@@ -120,6 +123,18 @@ function warpLines(warp: MapWarp): string[] {
   ]
   if (warp.facing !== undefined) lines.push(`"facing": ${JSON.stringify(warp.facing)}`)
   return commas(lines)
+}
+
+/**
+ * Events are the one part of a map that is a tree rather than a row of fields,
+ * so they are rendered by ordinary JSON pretty-printing and then re-indented.
+ * Hand-laying out nested conditionals would be a small pretty-printer with its
+ * own bugs, and the payoff — a slightly narrower diff — is not worth it. The
+ * grids, which are what a tile diff is read for, keep their own layout.
+ */
+function eventBlock(events: readonly MapEvent[]): string[] {
+  const body = JSON.stringify(events, null, 2).split('\n')
+  return ['  "events": ' + body[0], ...body.slice(1).map((l) => '  ' + l)]
 }
 
 /** Put a comma after every line but the last, whatever was appended. */

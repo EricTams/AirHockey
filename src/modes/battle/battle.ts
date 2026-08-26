@@ -515,7 +515,9 @@ export class BattleMode implements Mode {
       }
     } else if (this.phase === 'over') {
       if (this.input.pointerPressed || this.input.pressed('interact')) {
-        this.onSwitch?.(this.returnTo)
+        // Who won goes back with the transition, so an event's won:/lost:
+        // branches have something to branch on.
+        this.onSwitch?.(this.returnTo, { battleWon: this.score[0] > this.score[1] })
         return
       }
     }
