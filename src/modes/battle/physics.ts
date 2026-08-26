@@ -10,13 +10,8 @@
  */
 
 export interface Vec { x: number; y: number }
-/**
- * Where a paddle wants to be, and optionally how fast it is willing to travel
- * to get there. Without the speed, movePaddle always closes at full tilt, so a
- * caller cannot express an intent weaker than maximum — which is exactly what
- * splitting a speed budget between behaviours requires.
- */
-export interface Target extends Vec { speed?: number }
+/** Where a paddle wants to be. Travel is capped by the paddle's own top speed. */
+export type Target = Vec
 export interface Body extends Vec { vx: number; vy: number }
 
 /** Static deflector. Doc §8.1 calls for convex polygons; boxes cover v1's layouts. */
@@ -250,8 +245,7 @@ export class BattleSim {
     let dx = goal.x - p.x
     let dy = goal.y - p.y
     const dist = Math.hypot(dx, dy)
-    const speed = Math.min(this.cfg.paddle.maxSpeed, target.speed ?? this.cfg.paddle.maxSpeed)
-    const max = speed * dt
+    const max = this.cfg.paddle.maxSpeed * dt
     if (dist > max && dist > 0) {
       dx = (dx / dist) * max
       dy = (dy / dist) * max

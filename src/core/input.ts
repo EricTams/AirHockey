@@ -1,7 +1,6 @@
 export type Button =
   | 'up' | 'down' | 'left' | 'right' | 'interact'
   | 'debugMode' | 'debugOverlay' | 'pitchDown' | 'pitchUp'
-  | 'debugTrap' | 'debugAutoPlay'
 
 const BINDINGS: Record<string, Button> = {
   ArrowUp: 'up', KeyW: 'up',
@@ -13,8 +12,6 @@ const BINDINGS: Record<string, Button> = {
   F1: 'debugOverlay',
   BracketLeft: 'pitchDown',
   BracketRight: 'pitchUp',
-  KeyT: 'debugTrap',
-  KeyY: 'debugAutoPlay',
 }
 
 /**

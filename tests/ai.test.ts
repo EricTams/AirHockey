@@ -11,7 +11,7 @@ function heading(ai: OpponentAI, sim: BattleSim) {
   const dx = t.x - sim.opponent.x
   const dy = t.y - sim.opponent.y
   const d = Math.hypot(dx, dy) || 1
-  return { x: dx / d, y: dy / d, speed: t.speed ?? 0 }
+  return { x: dx / d, y: dy / d }
 }
 
 /** Unit direction from the paddle toward an arbitrary point. */
@@ -55,19 +55,26 @@ describe('heat', () => {
     expect(h.y).toBeCloseTo(want.y, 6)
   })
 
-  it('moves at full speed whether cold or hot', () => {
-    // The 60/40 weights blend the heading only. Heat redirects the paddle; it
-    // must never slow it down, or a hot opponent is simply a worse one.
-    const sim = new BattleSim(CFG)
-    const ai = new OpponentAI(1)
-    Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
-    expect(heading(ai, sim).speed).toBeCloseTo(CFG.paddle.maxSpeed, 6)
-
-    for (let i = 0; i < 40; i++) strike(ai, sim, 1.75, 2.1, 5)
-    expect(ai.heat).toBeGreaterThan(0.5)
-    for (let i = 0; i < 60; i++) {
-      expect(ai.update(sim).speed!).toBeCloseTo(CFG.paddle.maxSpeed, 6)
+  it('closes on a distant goal at full speed, cold or hot', () => {
+    // Sway redirects the paddle; it must never slow it down, or a hot opponent
+    // is simply a worse one.
+    const travelPerTick = (forceHeat: number) => {
+      const sim = new BattleSim(CFG)
+      const ai = new OpponentAI(1)
+      Object.assign(sim.puck, { x: -1.5, y: 0.4, vx: 0, vy: 0 })
+      Object.assign(sim.opponent, { x: 1.7, y: 3.2, vx: 0, vy: 0 })
+      const from = { x: sim.opponent.x, y: sim.opponent.y }
+      const ticks = 20
+      for (let i = 0; i < ticks; i++) {
+        ai.targetHeat = forceHeat
+        ai.heat = forceHeat
+        sim.step(1 / 60, { x: 0, y: -3 }, ai.update(sim))
+      }
+      return Math.hypot(sim.opponent.x - from.x, sim.opponent.y - from.y) / ticks
     }
+    const perTick = CFG.paddle.maxSpeed / 60
+    expect(travelPerTick(0)).toBeCloseTo(perTick, 3)
+    expect(travelPerTick(1)).toBeCloseTo(perTick, 3)
   })
 
   it('heat bends the heading away from straight pursuit', () => {
@@ -79,14 +86,18 @@ describe('heat', () => {
     const c = heading(cold, sim)
     expect(c.x).toBeCloseTo(want.x, 6)
 
+    // The sway is deliberately slow — several seconds per lap — so hold heat
+    // steady across a long sample; letting it cool would fade the sway away
+    // partway through and understate the bend.
     const hot = new OpponentAI(1)
-    for (let i = 0; i < 40; i++) strike(hot, sim, 1.75, 2.1, 5)
-    let maxBend = 0
-    for (let i = 0; i < 60; i++) {
+    let maxBendDeg = 0
+    for (let i = 0; i < 400; i++) {
+      hot.heat = 1
       const h = heading(hot, sim)
-      maxBend = Math.max(maxBend, Math.hypot(h.x - want.x, h.y - want.y))
+      const dot = Math.max(-1, Math.min(1, h.x * want.x + h.y * want.y))
+      maxBendDeg = Math.max(maxBendDeg, (Math.acos(dot) * 180) / Math.PI)
     }
-    expect(maxBend).toBeGreaterThan(0.2)
+    expect(maxBendDeg).toBeGreaterThan(8)
   })
 
   it('builds when strikes land in the same place in quick succession', () => {
@@ -118,10 +129,10 @@ describe('heat', () => {
     const sim = new BattleSim(CFG)
     const ai = new OpponentAI(1)
     for (let i = 0; i < 6; i++) strike(ai, sim, 1.75, 2.1, 10)
-    const hot = ai.heat
-    expect(hot).toBeGreaterThan(0)
-    for (let i = 0; i < 400; i++) ai.update(sim)
+    expect(ai.targetHeat).toBeGreaterThan(0)
+    for (let i = 0; i < 500; i++) ai.update(sim)
     expect(ai.heat).toBe(0)
+    expect(ai.targetHeat).toBe(0)
   })
 
   it('never exceeds full heat however long the grind runs', () => {

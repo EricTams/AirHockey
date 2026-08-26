@@ -70,7 +70,7 @@ const loop = new Loop(
       stubbed: assets.placeholders.length,
       geometries: gfx.gl.info.memory.geometries,
       textures: gfx.gl.info.memory.textures,
-      keys: 'WASD/mouse  Z  M mode  T trap  Y autoplay  F1',
+      keys: 'WASD/mouse move  Z talk  M mode  [ ] pitch  F1 overlay',
     })
   },
 )

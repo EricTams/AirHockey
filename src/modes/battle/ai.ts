@@ -1,5 +1,4 @@
-import type { BattleSim, Target, Vec } from './physics'
-import { TICK_HZ } from '../../core/config'
+import type { BattleSim, Vec } from './physics'
 
 /**
  * Opponent AI (doc §8.4), plus a heat mechanic that stops it grinding.
@@ -40,37 +39,57 @@ const SAME_BEAT_TICKS = 50
 const HEAT_PER_REPEAT = 0.25
 /** Heat shed per tick: full heat cools over about seven seconds of clean play. */
 const COOL_PER_TICK = 0.0025
-/** Orbit radius, in world units, at full heat. */
-const MAX_RADIUS = 0.85
-/** Sweep rate in radians per tick at the moment heat first appears. */
-const FREQ_MIN = 0.02
-/** Sweep rate in radians per tick at full heat. */
-const FREQ_MAX = 0.09
 /**
- * Ceiling on how fast the orbit may sweep, as a fraction of the paddle's own
- * top speed. The paddle has to actually trace the path: if the target circles
- * faster than the paddle can travel, it never catches up and the orbit collapses
- * back into the noise it was meant to replace.
+ * Most the acted-on heat may move per tick, chasing the target heat.
+ *
+ * Detection is inherently steppy — a repeat lands a chunk of heat in a single
+ * tick — and feeding that straight into position makes the paddle lurch. So
+ * detection writes a *target*, and what actually drives the sway follows it at
+ * a bounded rate. At this rate a full swing takes about a second.
  */
-const MAX_TANGENTIAL = 0.8
+const HEAT_SLEW = 0.017
+/**
+ * One sway curve. Every value is a constant, so the curve is a smooth function
+ * of time for as long as the match runs. Variety comes from blending two of
+ * them, not from modulating one — modulating a rate feeds a moving value into
+ * an accumulated phase, and that is what makes position lurch.
+ *
+ * Rates are per axis and deliberately not equal: at a 1:1 ratio a Lissajous
+ * figure degenerates to a circle or a straight line. The two curves also use
+ * different ratios, so their blend never settles into a repeating path.
+ */
+interface Sway {
+  /** Radians per tick, across the table. */
+  rateX: number
+  /** Radians per tick, along the table. */
+  rateY: number
+  /** Amplitude across the table, in world units. */
+  ampX: number
+  /** Amplitude along the table, in world units. */
+  ampY: number
+}
+
+/** At rest: flat, because a cold opponent should not sway at all. */
+const CALM: Sway = { rateX: 0.010, rateY: 0.015, ampX: 0, ampY: 0 }
 
 /**
- * How the two urges are weighted when blending the direction to move in:
- * pursuing the real target against weaving along the heat orbit. These mix the
- * *heading* only — the result is scaled back up to full speed afterwards, so a
- * hot AI is redirected, never slowed.
+ * Thoroughly cooked. 3:4 rates, and half as much sway along the table as
+ * across it: the AI's half is only 3.5 deep and the paddle is clamped out of
+ * the player's half, so longitudinal room is much tighter than lateral.
+ *
+ * Lateral amplitude is one paddle diameter, which is the natural unit here —
+ * the sway should read as the paddle wandering about its own width, not
+ * roaming a quarter of the table.
  */
-const BASE_SHARE = 0.6
-const HEAT_SHARE = 0.4
-/** How far ahead the returned target sits. Only its direction matters. */
-const LOOKAHEAD = 0.5
+const AGITATED: Sway = { rateX: 0.018, rateY: 0.024, ampX: 0.44, ampY: 0.22 }
+
 /**
- * Rate of the third oscillator, in radians per tick — fixed, independent of
- * heat, so it reads as an underlying rhythm rather than agitation.
+ * How far ahead the returned point sits when the target is further off than
+ * this. Never further than the target itself: a point permanently beyond the
+ * paddle can never be reached, so the paddle overshoots and reverses every
+ * tick instead of settling.
  */
-const RATIO_FREQ = 0.011
-/** How far that oscillator swings the sin/cos frequency ratio either side of 1. */
-const RATIO_SWING = 0.6
+const LOOKAHEAD = 0.5
 /** A puck this close to a side wall is treated as cornered. */
 const WALL_ZONE = 0.7
 /**
@@ -90,21 +109,9 @@ export interface HeatTuning {
   sameBeatTicks: number
   heatPerRepeat: number
   coolPerTick: number
-  /** Orbit radius at full heat. */
-  maxRadius: number
-  /** Exponent on heat for the radius. >1 keeps mild heat nearly harmless. */
-  radiusCurve: number
-  freqMin: number
-  freqMax: number
-  /**
-   * Exponent on heat for the sweep rate. Deliberately separate from
-   * radiusCurve: radius and frequency are what shape the motion's character,
-   * and moving them in lockstep just makes a hot AI uniformly "more", rather
-   * than differently, agitated.
-   */
-  freqCurve: number
-  ratioFreq: number
-  ratioSwing: number
+  calm: Sway
+  agitated: Sway
+  heatSlew: number
 }
 
 export const DEFAULT_HEAT: HeatTuning = {
@@ -112,43 +119,48 @@ export const DEFAULT_HEAT: HeatTuning = {
   sameBeatTicks: SAME_BEAT_TICKS,
   heatPerRepeat: HEAT_PER_REPEAT,
   coolPerTick: COOL_PER_TICK,
-  maxRadius: MAX_RADIUS,
-  radiusCurve: 2,
-  freqMin: FREQ_MIN,
-  freqMax: FREQ_MAX,
-  freqCurve: 1,
-  ratioFreq: RATIO_FREQ,
-  ratioSwing: RATIO_SWING,
+  calm: CALM,
+  agitated: AGITATED,
+  heatSlew: HEAT_SLEW,
 }
 
 export class OpponentAI {
-  /** 0 when composed, 1 when thoroughly stuck. Drives how much aim scatters. */
+  /**
+   * What the detector currently thinks: 0 when composed, 1 when thoroughly
+   * stuck. Steps around freely, and nothing reads it for motion.
+   */
+  targetHeat = 0
+  /**
+   * What actually drives the sway. Follows targetHeat at a bounded rate, so the
+   * value position depends on is always continuous.
+   */
   heat = 0
   /** Strikes that landed in the same place as the one before, this match. */
   repeats = 0
 
   private lastStrike?: Vec & { tick: number }
   private tick = 0
-  /**
-   * Phases are integrated rather than computed as tick × frequency. Frequency
-   * changes with heat, and multiplying elapsed ticks by a changing rate makes
-   * the offset jump every time heat moves. Accumulating keeps the path
-   * continuous however the rate drifts.
-   */
-  private phaseX = 0
-  private phaseY = 0
+  /** Running phase of each curve, one pair per curve, advanced at fixed rates. */
+  private calmX = 0
+  private calmY = 0
+  private hotX = 0
+  private hotY = 0
 
   private t: HeatTuning
 
   /** `seed` only sets the starting phase, so two opponents weave out of step. */
   constructor(seed = 0, tuning: Partial<HeatTuning> = {}) {
-    this.phaseX = seed
-    this.phaseY = seed * 1.7
+    // Seed only offsets the starting phases, so two opponents weave out of step.
+    this.calmX = seed
+    this.calmY = seed * 1.7
+    this.hotX = seed * 2.3
+    this.hotY = seed * 3.1
     this.t = { ...DEFAULT_HEAT, ...tuning }
   }
 
   /** Clear per-rally state. Called on every faceoff, since the situation is new. */
   reset(): void {
+    this.targetHeat = 0
     this.heat = 0
     this.repeats = 0
     this.lastStrike = undefined
@@ -156,16 +168,16 @@ export class OpponentAI {
 
 
   /** Advance one tick and return where the opponent's paddle should go. */
-  update(sim: BattleSim): Target {
+  update(sim: BattleSim): Vec {
     this.tick++
     // Snap to exactly zero: repeated subtraction leaves a float residue that
-    // would otherwise keep scattering aim, faintly, forever.
-    const cooled = this.heat - this.t.coolPerTick
-    this.heat = cooled < 1e-6 ? 0 : cooled
+    // would otherwise keep swaying the aim, faintly, forever.
+    const cooled = this.targetHeat - this.t.coolPerTick
+    this.targetHeat = cooled < 1e-6 ? 0 : cooled
 
     // Leaning on a stationary puck heats up on its own, with no strike needed.
     if (sim.opponentContact && sim.speed < PIN_SPEED) {
-      this.heat = Math.min(1, this.heat + HEAT_PER_PRESS_TICK)
+      this.targetHeat = Math.min(1, this.targetHeat + HEAT_PER_PRESS_TICK)
     }
 
     const hit = sim.lastOpponentHit
@@ -174,73 +186,63 @@ export class OpponentAI {
       const samePlace = last && Math.hypot(hit.x - last.x, hit.y - last.y) < this.t.samePlace
       const sameBeat = last && this.tick - last.tick <= this.t.sameBeatTicks
       if (samePlace && sameBeat) {
-        this.heat = Math.min(1, this.heat + this.t.heatPerRepeat)
+        this.targetHeat = Math.min(1, this.targetHeat + this.t.heatPerRepeat)
         this.repeats++
       }
       this.lastStrike = { x: hit.x, y: hit.y, tick: this.tick }
     }
 
     const target = baseTarget(sim)
-    const maxSpeed = sim.cfg.paddle.maxSpeed
     const me = sim.opponent
 
-    // Pursuit's share of the heading.
-    let vx = 0
-    let vy = 0
-    const dx = target.x - me.x
-    const dy = target.y - me.y
+    // Ease the acted-on heat toward the target. Everything downstream reads
+    // this one, so smoothing here covers every consumer at once.
+    const gap = this.targetHeat - this.heat
+    this.heat += Math.abs(gap) <= this.t.heatSlew ? gap : Math.sign(gap) * this.t.heatSlew
+
+    // Both curves run at their own fixed rates all the time, whether or not
+    // heat is using them, so neither jumps when the blend picks it up.
+    const { calm, agitated } = this.t
+    this.calmX += calm.rateX
+    this.calmY += calm.rateY
+    this.hotX += agitated.rateX
+    this.hotY += agitated.rateY
+
+    /*
+     * Displace the goal by the sway, then aim at that displaced point. Always:
+     * the calm curve has no amplitude, so at zero heat the blend contributes
+     * nothing and no separate gate is needed.
+     *
+     * Heat enters here once, through the blend, and nowhere else. It used to
+     * scale the sway three times over — through the blend, through a share of
+     * the heading, and quadratically as a result — so an amplitude of 0.9 in
+     * the config reached the paddle as 0.36, and only at the very hottest.
+     *
+     * Blending the two curves' outputs keeps this smooth: each is a smooth
+     * function of time for all time, so any weighting of them is smooth too.
+     *
+     * The displacement must happen before the arrival check below. Measuring
+     * arrival against the *undisplaced* target means that once the paddle parks
+     * on it there is no distance left to travel, so the sway gets multiplied by
+     * zero — computed every tick and never once acted on.
+     */
+    const b = this.heat
+    const goalX =
+      target.x + (1 - b) * calm.ampX * Math.cos(this.calmX) + b * agitated.ampX * Math.cos(this.hotX)
+    const goalY =
+      target.y + (1 - b) * calm.ampY * Math.sin(this.calmY) + b * agitated.ampY * Math.sin(this.hotY)
+
+    const dx = goalX - me.x
+    const dy = goalY - me.y
     const dist = Math.hypot(dx, dy)
-    if (dist > 1e-6) {
-      vx = (dx / dist) * BASE_SHARE
-      vy = (dy / dist) * BASE_SHARE
-    }
+    if (dist < 1e-6) return { x: me.x, y: me.y }
 
-    if (this.heat > 0) {
-      /*
-       * Heat spends its share weaving the paddle around, on a Lissajous orbit
-       * rather than random jitter — a continuous path the paddle can actually
-       * follow, instead of a fresh random point every tick that averages back
-       * out to nothing.
-       *
-       * Radius and sweep rate both grow with heat on separate curves, and a
-       * third fixed-rate oscillator drifts the ratio between the x and y sweep
-       * rates. That keeps the figure open rather than retracing one closed
-       * loop, so the AI keeps arriving from somewhere new.
-       */
-      const heat = this.heat
-      const radius = Math.pow(heat, this.t.radiusCurve) * this.t.maxRadius
-      let freq =
-        this.t.freqMin + (this.t.freqMax - this.t.freqMin) * Math.pow(heat, this.t.freqCurve)
-      if (radius > 1e-6) {
-        // Keep it followable: tangential speed is radius × freq × tick rate.
-        freq = Math.min(freq, (maxSpeed * MAX_TANGENTIAL) / (radius * TICK_HZ))
-      }
-      const ratio = 1 + this.t.ratioSwing * Math.sin(this.tick * this.t.ratioFreq)
-
-      this.phaseX += freq
-      this.phaseY += freq * ratio
-
-      // Travel along the orbit, not toward a point on it: the tangent is the
-      // direction the weave is actually heading right now.
-      const ox = -Math.sin(this.phaseX)
-      const oy = ratio * Math.cos(this.phaseY)
-      const on = Math.hypot(ox, oy)
-      if (on > 1e-6) {
-        const share = HEAT_SHARE * Math.pow(heat, this.t.radiusCurve)
-        vx += (ox / on) * share
-        vy += (oy / on) * share
-      }
-    }
-
-    // Scale the blended heading back up to full speed. The weights decide which
-    // way to go, not how hard to go: a hot AI is redirected, never slowed.
-    const len = Math.hypot(vx, vy)
-    if (len < 1e-6) return { ...target, speed: 0 }
-
+    // Never aim past the goal: a point permanently beyond the paddle can never
+    // be reached, so it overshoots and reverses every tick instead of settling.
+    const reach = Math.min(LOOKAHEAD, dist)
     return {
-      x: me.x + (vx / len) * LOOKAHEAD,
-      y: me.y + (vy / len) * LOOKAHEAD,
-      speed: maxSpeed,
+      x: me.x + (dx / dist) * reach,
+      y: me.y + (dy / dist) * reach,
     }
   }
 }

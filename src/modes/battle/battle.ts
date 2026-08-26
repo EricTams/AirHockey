@@ -59,8 +59,12 @@ export class BattleMode implements Mode {
 
   private sim!: BattleSim
   private ai = new OpponentAI()
-  /** Debug harness: drive the player paddle with a bot so rallies sustain. */
-  private autoPlay = false
+  /**
+   * Harness switches, set from the dev console rather than bound to keys —
+   * they were crowding out the real controls. See `__game.battle`.
+   */
+  autoPlay = false
+  heatLock = false
   private phase: Phase = 'countdown'
   private timer = 0
   private stuck = 0
@@ -107,6 +111,7 @@ export class BattleMode implements Mode {
     // Debug flags must not leak between battles, or a harness run inherits
     // whatever the last one left switched on.
     this.autoPlay = false
+    this.heatLock = false
     void this.build(p)
   }
 
@@ -381,38 +386,32 @@ export class BattleMode implements Mode {
   }
 
   /**
-   * Debug harness. `T` throws the puck into a corner of the AI's half at low
-   * speed — the state a grind starts from — and `Y` hands the player's paddle
-   * to a bot that returns everything, so a rally sustains and the AI can be
-   * watched working itself into and out of trouble without anyone playing.
+   * Throw the puck into a corner of the AI's half at low speed — the state a
+   * grind starts from — alternating corners on repeat calls, and seat the
+   * opponent alongside so it begins at once. Console-callable for testing.
    */
-  private debugKeys(): void {
-    if (this.input.pressed('debugTrap')) {
-      const { width, length } = this.sim.cfg.table
-      const r = this.sim.cfg.puck.radius
-      const side = this.sim.puck.x >= 0 ? -1 : 1     // alternate corners
+  trapPuck(): void {
+    if (!this.sim) return
+    const { width, length } = this.sim.cfg.table
+    const r = this.sim.cfg.puck.radius
+    const side = this.sim.puck.x >= 0 ? -1 : 1
 
-      // Wedge it right into the angle where the side wall meets the AI's own
-      // end wall, drifting into both. That is where a grind actually starts:
-      // the paddle can only just reach, and every strike rebounds off a wall
-      // straight back into the same pocket.
-      Object.assign(this.sim.puck, {
-        x: side * (width / 2 - r - 0.01),
-        y: length / 2 - r - 0.04,
-        vx: side * 0.25,
-        vy: 0.15,
-      })
-      // Seat the opponent alongside it, so the grind begins at once instead of
-      // waiting for the AI to travel across the table.
-      Object.assign(this.sim.opponent, {
-        x: side * (width / 2 - this.sim.cfg.paddle.radius),
-        y: length / 2 - this.sim.cfg.paddle.radius,
-        vx: 0,
-        vy: 0,
-      })
-      if (this.phase === 'ready') { this.phase = 'play'; this.timer = 0 }
+    Object.assign(this.sim.puck, {
+      x: side * (width / 2 - r - 0.01),
+      y: length / 2 - r - 0.04,
+      vx: side * 0.25,
+      vy: 0.15,
+    })
+    Object.assign(this.sim.opponent, {
+      x: side * (width / 2 - this.sim.cfg.paddle.radius),
+      y: length / 2 - this.sim.cfg.paddle.radius,
+      vx: 0,
+      vy: 0,
+    })
+    if (this.phase === 'ready') {
+      this.phase = 'play'
+      this.timer = 0
     }
-    if (this.input.pressed('debugAutoPlay')) this.autoPlay = !this.autoPlay
   }
 
   /** Player paddle target, from the pointer when it is in use, else the keys. */
@@ -449,7 +448,6 @@ export class BattleMode implements Mode {
 
   update(dt: number): void {
     if (!this.sim) return
-    this.debugKeys()
 
     if (this.phase === 'ready') {
       // The bot harness serves itself, so a long observation run is not halted
@@ -480,6 +478,12 @@ export class BattleMode implements Mode {
       }
       if (--this.timer <= 0) this.phase = 'play'
     } else if (this.phase === 'play') {
+      // Held at full for inspection; purely a harness affordance, and it
+      // overwrites rather than feeding the detector, so nothing else changes.
+      if (this.heatLock) {
+        this.ai.targetHeat = 1
+        this.ai.heat = 1
+      }
       const result = this.sim.step(dt, this.playerTarget(), this.ai.update(this.sim))
       if (result === 'dislodged') {
         // Knocking the wing loose is the whole win condition in this mode.
@@ -622,9 +626,10 @@ export class BattleMode implements Mode {
   get status(): Record<string, string | number> {
     return {
       phase: this.phase,
-      heat: this.ai.heat.toFixed(2),
+      heat: `${this.ai.heat.toFixed(2)} -> ${this.ai.targetHeat.toFixed(2)}${this.heatLock ? ' LOCKED' : ''}`,
       repeats: this.ai.repeats,
-      autoPlay: this.autoPlay ? 'on (Y)' : 'off (Y)',
+      ...(this.autoPlay ? { autoPlay: 'on' } : {}),
+      ...(this.heatLock ? { heatLock: 'ON' } : {}),
       puck: `${this.sim?.puck.x.toFixed(1)},${this.sim?.puck.y.toFixed(1)}`,
       squeeze: this.sim?.compression.toFixed(2) ?? '-',
     }
