@@ -4,6 +4,7 @@ import type { OverworldMode } from '../modes/overworld'
 import type { EditorServer } from './server'
 import { parseMap, type LayerName } from '../world/map'
 import { EMPTY_TILE, isPaintable, parseTileset } from '../world/tileset'
+import { stampWrites, type Write } from './stamp'
 import { fetchJson } from '../core/paths'
 import { MIN_ZOOM, MAX_ZOOM } from '../world/projection'
 import { MapDoc, COLLISION, isNothing, blankMap, resizeMap, type EditTarget, type Touched } from './mapDoc'
@@ -101,6 +102,8 @@ export class Editor {
   private zoom = 1
 
   private painting?: Painting
+  /** Where the current stroke began: the lattice a multi-tile stamp snaps to. */
+  private strokeOrigin: Cell = { x: 0, y: 0 }
   private pan?: PanState
   private hover?: Cell
   private saving = false
@@ -373,6 +376,7 @@ export class Editor {
     if (this.tool === 'eyedropper') { this.eyedrop(cell); return }
 
     this.doc.beginStroke(`${this.tool} ${this.target}`)
+    this.strokeOrigin = cell
     this.painting = {
       target: this.target,
       tool: this.tool,
@@ -384,7 +388,12 @@ export class Editor {
     if (this.painting.preview) {
       this.overlay?.setCursor(rectCells(cell, cell))
     } else {
-      this.applyCells(toolCells(this.doc, this.target, this.tool, cell, cell))
+      // A fill covers a region, so it tiles the stamp inside it rather than
+      // stamping past its edge.
+      this.applyCells(
+        toolCells(this.doc, this.target, this.tool, cell, cell),
+        this.tool === 'fill',
+      )
       // A fill is one click and done; there is nothing to drag.
       if (this.tool === 'fill') this.finishStroke()
     }
@@ -411,7 +420,7 @@ export class Editor {
     if (this.tab === 'events') { this.eventEditor?.pointerDrag(cell); return }
 
     const p = this.painting
-    if (!p) { this.overlay?.setCursor([cell]); return }
+    if (!p) { this.overlay?.setCursor(this.footprint(cell)); return }
 
     if (p.preview) {
       p.last = cell
@@ -422,7 +431,7 @@ export class Editor {
     // Brush: fill in the cells the pointer skipped over between frames.
     this.applyCells(toolCells(this.doc, p.target, p.tool, p.last, cell))
     p.last = cell
-    this.overlay?.setCursor([cell])
+    this.overlay?.setCursor(this.footprint(cell))
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -431,7 +440,7 @@ export class Editor {
     if (this.tab === 'events') { this.eventEditor?.pointerUp(); return }
     if (!this.painting || e.button !== 0) return
     const p = this.painting
-    if (p.preview) this.applyCells(rectCells(p.from, p.last))
+    if (p.preview) this.applyCells(rectCells(p.from, p.last), true)
     this.finishStroke()
   }
 
@@ -472,17 +481,33 @@ export class Editor {
 
   // --- Editing -------------------------------------------------------------
 
-  private get paintValue(): number {
-    if (this.target === COLLISION) return this.erasing ? 0 : 1
-    return this.erasing ? EMPTY_TILE : (this.palette?.selectedIndex ?? EMPTY_TILE)
+  /** The block of cells one brush position lays down, and what goes in each. */
+  private get stamp(): { w: number; h: number } {
+    // Collision and erase have no art, but they keep the selection's footprint:
+    // a 2x3 grab should block or clear a 2x3 area, not one tile.
+    const region = this.palette?.selectedRegion
+    return { w: region?.w ?? 1, h: region?.h ?? 1 }
   }
 
-  private applyCells(cells: readonly Cell[]): void {
+  /**
+   * Expand a tool's cells through the palette selection. See stamp.ts for the
+   * rule; this just supplies the pieces it needs from the editor's state.
+   */
+  private writesFor(cells: readonly Cell[], clip: boolean): Write[] {
+    const tileset = this.host.overworld.currentTileset
+    const region = this.palette?.selectedRegion ?? { col: 0, row: 0, w: 1, h: 1 }
+    const collision = this.target === COLLISION
+    const flat = collision ? (this.erasing ? 0 : 1) : this.erasing ? EMPTY_TILE : undefined
+    return stampWrites(cells, region, this.strokeOrigin, tileset.cols, clip, flat)
+  }
+
+  private applyCells(cells: readonly Cell[], clip = false): void {
     const doc = this.doc
     if (!doc) return
-    const value = this.paintValue
     let changed = false
-    for (const c of cells) changed = doc.set(this.target, c.x, c.y, value) || changed
+    for (const w of this.writesFor(cells, clip)) {
+      changed = doc.set(this.target, w.x, w.y, w.value) || changed
+    }
     if (changed) {
       this.refresh({
         layers: layersOf(this.target),
@@ -501,7 +526,7 @@ export class Editor {
     if (!isNothing(touched)) this.refresh(touched)
     // Drop a rect's preview back to the single hovered cell, or the region it
     // just painted stays washed out under the highlight.
-    this.overlay?.setCursor(this.hover ? [this.hover] : [])
+    this.overlay?.setCursor(this.hover ? this.footprint(this.hover) : [])
     this.updateStatus()
     this.syncButtons()
   }
@@ -619,6 +644,17 @@ export class Editor {
     } catch (err) {
       this.message(`Could not rebuild: ${(err as Error).message}`, 'err')
     }
+  }
+
+  /** The block the cursor would lay down, for the highlight. */
+  private footprint(cell: Cell): Cell[] {
+    const { w, h } = this.stamp
+    if (w === 1 && h === 1) return [cell]
+    const cells: Cell[] = []
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) cells.push({ x: cell.x + i, y: cell.y + j })
+    }
+    return cells
   }
 
   private eyedrop(cell: Cell): void {
@@ -967,12 +1003,14 @@ export class Editor {
     const dom = this.dom
     if (!dom) return
     dom.cellText.textContent = this.hover ? `${this.hover.x},${this.hover.y}` : '–'
+    const { w: sw, h: sh } = this.stamp
+    const size = sw * sh > 1 ? ` ${sw}×${sh}` : ''
     if (this.erasing) {
-      dom.tileText.textContent = this.target === COLLISION ? 'clear' : 'erase'
+      dom.tileText.textContent = (this.target === COLLISION ? 'clear' : 'erase') + size
     } else if (this.target === COLLISION) {
-      dom.tileText.textContent = 'block'
+      dom.tileText.textContent = 'block' + size
     } else {
-      dom.tileText.textContent = `#${this.palette?.selectedIndex ?? 0}`
+      dom.tileText.textContent = `#${this.palette?.selectedIndex ?? 0}${size}`
     }
     this.syncButtons()
   }

@@ -1,5 +1,9 @@
 import { cellOf, indexOf, isPaintable, tileCount, type Tileset } from '../world/tileset'
 
+function clamp(v: number, max: number): number {
+  return Math.max(0, Math.min(max, v))
+}
+
 /**
  * The tile palette: the sheet drawn at a chosen scale with the grid over it,
  * and a click selecting a cell.
@@ -12,7 +16,19 @@ import { cellOf, indexOf, isPaintable, tileCount, type Tileset } from '../world/
  * Cells the rider does not mark paintable are dimmed but still selectable.
  * Decision 5 in the handoff: the rider proposes and the designer decides, so a
  * wrong classification must not be able to lock art away.
+ *
+ * A drag selects a rectangle rather than a cell, because most art on a sheet is
+ * bigger than one tile — a house, a cliff face, a three-tile tree — and placing
+ * it a tile at a time means getting the neighbours right by hand every time.
  */
+
+/** A rectangle of cells on the sheet. `w` and `h` are 1 for a single tile. */
+export interface Region {
+  col: number
+  row: number
+  w: number
+  h: number
+}
 
 /** Ring drawn around the selected cell, in device pixels. */
 const RING = 2
@@ -22,7 +38,9 @@ export class TilePalette {
 
   private ctx: CanvasRenderingContext2D
   private scale = 1
-  private selected = 0
+  private region: Region = { col: 0, row: 0, w: 1, h: 1 }
+  /** Where a drag started, so the rectangle can be spanned from either corner. */
+  private anchor?: { col: number; row: number }
 
   constructor(
     private tileset: Tileset,
@@ -33,22 +51,35 @@ export class TilePalette {
     const ctx = this.canvas.getContext('2d')
     if (!ctx) throw new Error('editor palette: no 2d context')
     this.ctx = ctx
-    this.canvas.addEventListener('pointerdown', (e) => this.pick(e))
+    this.canvas.addEventListener('pointerdown', (e) => this.onDown(e))
+    this.canvas.addEventListener('pointermove', (e) => this.onMove(e))
+    this.canvas.addEventListener('pointerup', () => this.onUp())
+    this.canvas.addEventListener('pointercancel', () => this.onUp())
   }
 
-  get selectedIndex(): number { return this.selected }
+  /** Top-left of the selection. What a single-tile caller wants. */
+  get selectedIndex(): number {
+    return indexOf(this.tileset, this.region.col, this.region.row)
+  }
+
+  /** The whole selection, which may be more than one cell. */
+  get selectedRegion(): Region { return { ...this.region } }
 
   /** Point the palette at a different sheet, e.g. after an import. */
   setTileset(tileset: Tileset, image: CanvasImageSource): void {
     this.tileset = tileset
     this.image = image
-    if (this.selected >= tileCount(tileset)) this.selected = 0
+    // A selection on the old sheet means nothing on this one, and might not
+    // even fit it.
+    this.region = { col: 0, row: 0, w: 1, h: 1 }
     this.layout()
   }
 
+  /** Select a single cell by index, e.g. from the eyedropper. */
   select(index: number): void {
     if (index < 0 || index >= tileCount(this.tileset)) return
-    this.selected = index
+    const { col, row } = cellOf(this.tileset, index)
+    this.region = { col, row, w: 1, h: 1 }
     this.draw()
   }
 
@@ -118,21 +149,49 @@ export class TilePalette {
       ctx.stroke()
     }
 
-    const { col, row } = cellOf(this.tileset, this.selected)
+    const { col, row, w, h } = this.region
     ctx.strokeStyle = '#ffd465'
     ctx.lineWidth = RING
     ctx.strokeRect(
-      col * cell + RING / 2, row * cell + RING / 2, cell - RING, cell - RING,
+      col * cell + RING / 2, row * cell + RING / 2,
+      w * cell - RING, h * cell - RING,
     )
   }
 
-  private pick(e: PointerEvent): void {
+  /** The cell under a pointer, clamped to the sheet so a drag off the edge
+   *  still spans to the edge rather than being dropped. */
+  private cellAt(e: PointerEvent): { col: number; row: number } {
     const rect = this.canvas.getBoundingClientRect()
-    const col = Math.floor((e.clientX - rect.left) / this.cellPx)
-    const row = Math.floor((e.clientY - rect.top) / this.cellPx)
-    if (col < 0 || row < 0 || col >= this.tileset.cols || row >= this.tileset.rows) return
-    this.selected = indexOf(this.tileset, col, row)
+    return {
+      col: clamp(Math.floor((e.clientX - rect.left) / this.cellPx), this.tileset.cols - 1),
+      row: clamp(Math.floor((e.clientY - rect.top) / this.cellPx), this.tileset.rows - 1),
+    }
+  }
+
+  private onDown(e: PointerEvent): void {
+    this.canvas.setPointerCapture(e.pointerId)
+    this.anchor = this.cellAt(e)
+    this.region = { ...this.anchor, w: 1, h: 1 }
     this.draw()
-    this.onPick(this.selected)
+  }
+
+  private onMove(e: PointerEvent): void {
+    if (!this.anchor) return
+    const to = this.cellAt(e)
+    this.region = {
+      col: Math.min(this.anchor.col, to.col),
+      row: Math.min(this.anchor.row, to.row),
+      w: Math.abs(to.col - this.anchor.col) + 1,
+      h: Math.abs(to.row - this.anchor.row) + 1,
+    }
+    this.draw()
+  }
+
+  private onUp(): void {
+    if (!this.anchor) return
+    this.anchor = undefined
+    // Reported on release rather than on press, so the caller sees the finished
+    // rectangle rather than the single cell the drag started from.
+    this.onPick(this.selectedIndex)
   }
 }

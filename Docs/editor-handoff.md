@@ -259,6 +259,14 @@ world coordinates.
 `VIRTUAL_H / TILE`, so the framed area is fixed. Editing a large map without
 zoom will be painful.
 
+**The palette selects a rectangle, not a cell.** Most art on a sheet is bigger
+than one tile, so a drag grabs a block and a brush lays the whole block down.
+Stamp positions snap to a lattice anchored at the cell the stroke started on —
+otherwise dragging stamps overlapping copies a tile apart and produces mush.
+A brush writes past the cells the tool named, because that is what a stamp
+means; rect and fill clip to their region and tile the pattern inside it. See
+`src/editor/stamp.ts`.
+
 **The rest:** palette drawn from the sheet into a DOM canvas (cell rects via
 `indexOf`, honour `isPaintable`); layer selector; brush / rect / fill /
 eyedropper / erase; a collision-grid overlay with its own tool; undo as a stroke
