@@ -1,4 +1,4 @@
-import type { BattleSim, Vec } from './physics'
+import type { BattleSim, Target, Vec } from './physics'
 import { TICK_HZ } from '../../core/config'
 
 /**
@@ -53,6 +53,17 @@ const FREQ_MAX = 0.09
  * back into the noise it was meant to replace.
  */
 const MAX_TANGENTIAL = 0.8
+
+/**
+ * How the paddle's speed budget is split. Pursuing the real target gets the
+ * larger share; heat spends the rest weaving. The two are summed as velocities
+ * and the total clamped to the paddle's top speed, so heat can redirect the
+ * paddle but never outrun it.
+ */
+const BASE_SHARE = 0.6
+const HEAT_SHARE = 0.4
+/** How far ahead the returned target sits. Only its direction matters. */
+const LOOKAHEAD = 0.5
 /**
  * Rate of the third oscillator, in radians per tick — fixed, independent of
  * heat, so it reads as an underlying rhythm rather than agitation.
@@ -128,8 +139,6 @@ export class OpponentAI {
   private phaseY = 0
 
   private t: HeatTuning
-  /** Cached from the sim so the sweep cap can reference the paddle's top speed. */
-  private cfg = { paddleSpeed: 9 }
 
   /** `seed` only sets the starting phase, so two opponents weave out of step. */
   constructor(seed = 0, tuning: Partial<HeatTuning> = {}) {
@@ -147,7 +156,7 @@ export class OpponentAI {
 
 
   /** Advance one tick and return where the opponent's paddle should go. */
-  update(sim: BattleSim): Vec {
+  update(sim: BattleSim): Target {
     this.tick++
     // Snap to exactly zero: repeated subtraction leaves a float residue that
     // would otherwise keep scattering aim, faintly, forever.
@@ -172,41 +181,70 @@ export class OpponentAI {
     }
 
     const target = baseTarget(sim)
-    if (this.heat <= 0) return target
+    const maxSpeed = sim.cfg.paddle.maxSpeed
+    const me = sim.opponent
 
-    /*
-     * Heat weaves the aim around where it would otherwise go, on a Lissajous
-     * orbit rather than random jitter — a continuous path the paddle can
-     * actually follow, instead of a fresh random point every tick that mostly
-     * averages back out.
-     *
-     * Radius and sweep rate both grow with heat but on separate curves, and a
-     * third fixed-rate oscillator drifts the ratio between the x and y sweep
-     * rates. That keeps the figure open rather than retracing one closed loop,
-     * so the AI keeps arriving from somewhere new instead of settling into
-     * another repeatable line.
-     *
-     * Clamping to the paddle's own half happens in the sim, so an aim that
-     * strays off-table simply presses at the boundary.
-     */
-    const heat = this.heat
-    this.cfg.paddleSpeed = sim.cfg.paddle.maxSpeed
-    const radius = Math.pow(heat, this.t.radiusCurve) * this.t.maxRadius
-    let freq =
-      this.t.freqMin + (this.t.freqMax - this.t.freqMin) * Math.pow(heat, this.t.freqCurve)
-    // Keep the orbit followable: tangential speed is radius × freq × tick rate.
-    if (radius > 1e-6) {
-      const cap = (this.cfg.paddleSpeed * MAX_TANGENTIAL) / (radius * TICK_HZ)
-      freq = Math.min(freq, cap)
+    // Share going to the real target.
+    let vx = 0
+    let vy = 0
+    const dx = target.x - me.x
+    const dy = target.y - me.y
+    const dist = Math.hypot(dx, dy)
+    if (dist > 1e-6) {
+      vx = (dx / dist) * maxSpeed * BASE_SHARE
+      vy = (dy / dist) * maxSpeed * BASE_SHARE
     }
-    const ratio = 1 + this.t.ratioSwing * Math.sin(this.tick * this.t.ratioFreq)
 
-    this.phaseX += freq
-    this.phaseY += freq * ratio
+    if (this.heat > 0) {
+      /*
+       * Heat spends its share weaving the paddle around, on a Lissajous orbit
+       * rather than random jitter — a continuous path the paddle can actually
+       * follow, instead of a fresh random point every tick that averages back
+       * out to nothing.
+       *
+       * Radius and sweep rate both grow with heat on separate curves, and a
+       * third fixed-rate oscillator drifts the ratio between the x and y sweep
+       * rates. That keeps the figure open rather than retracing one closed
+       * loop, so the AI keeps arriving from somewhere new.
+       */
+      const heat = this.heat
+      const radius = Math.pow(heat, this.t.radiusCurve) * this.t.maxRadius
+      let freq =
+        this.t.freqMin + (this.t.freqMax - this.t.freqMin) * Math.pow(heat, this.t.freqCurve)
+      if (radius > 1e-6) {
+        // Keep it followable: tangential speed is radius × freq × tick rate.
+        freq = Math.min(freq, (maxSpeed * MAX_TANGENTIAL) / (radius * TICK_HZ))
+      }
+      const ratio = 1 + this.t.ratioSwing * Math.sin(this.tick * this.t.ratioFreq)
+
+      this.phaseX += freq
+      this.phaseY += freq * ratio
+
+      // Travel along the orbit, not toward a point on it: the tangent is the
+      // direction the weave is actually heading right now.
+      const ox = -Math.sin(this.phaseX)
+      const oy = ratio * Math.cos(this.phaseY)
+      const on = Math.hypot(ox, oy)
+      if (on > 1e-6) {
+        const share = maxSpeed * HEAT_SHARE * Math.pow(heat, this.t.radiusCurve)
+        vx += (ox / on) * share
+        vy += (oy / on) * share
+      }
+    }
+
+    // Clamp the combined intent to what the paddle can actually do.
+    let speed = Math.hypot(vx, vy)
+    if (speed > maxSpeed) {
+      vx = (vx / speed) * maxSpeed
+      vy = (vy / speed) * maxSpeed
+      speed = maxSpeed
+    }
+    if (speed < 1e-6) return { ...target, speed: 0 }
 
     return {
-      x: target.x + radius * Math.cos(this.phaseX),
-      y: target.y + radius * Math.sin(this.phaseY),
+      x: me.x + (vx / speed) * LOOKAHEAD,
+      y: me.y + (vy / speed) * LOOKAHEAD,
+      speed,
     }
   }
 }

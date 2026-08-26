@@ -10,6 +10,13 @@
  */
 
 export interface Vec { x: number; y: number }
+/**
+ * Where a paddle wants to be, and optionally how fast it is willing to travel
+ * to get there. Without the speed, movePaddle always closes at full tilt, so a
+ * caller cannot express an intent weaker than maximum — which is exactly what
+ * splitting a speed budget between behaviours requires.
+ */
+export interface Target extends Vec { speed?: number }
 export interface Body extends Vec { vx: number; vy: number }
 
 /** Static deflector. Doc §8.1 calls for convex polygons; boxes cover v1's layouts. */
@@ -90,6 +97,10 @@ const COMPRESS_PER_SUBSTEP = 0.09
 const MAX_COMPRESSION = 3.2
 /** Fraction of stored compression handed back as velocity on release. */
 const RELEASE_EFFICIENCY = 0.85
+/** Release direction wanders this far either side of the wall normal, in radians. */
+const RELEASE_SPREAD = 0.55
+/** Release strength varies between this and full, so no two springs match. */
+const RELEASE_MIN_SCALE = 0.65
 const DEG = Math.PI / 180
 
 export class BattleSim {
@@ -121,11 +132,21 @@ export class BattleSim {
   compression = 0
   private releaseX = 0
   private releaseY = 0
+  private rngState: number
+
+  /** Deterministic PRNG, so a seeded match still replays identically. */
+  private rand(): number {
+    this.rngState = (this.rngState + 0x6d2b79f5) >>> 0
+    let t = Math.imul(this.rngState ^ (this.rngState >>> 15), 1 | this.rngState)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
 
   private pipeCooldown = 0
   private wingCooldown = 0
 
-  constructor(readonly cfg: BattleConfig) {
+  constructor(readonly cfg: BattleConfig, seed = 0x2545f491) {
+    this.rngState = seed >>> 0
     const wing = this.wing
     this.wingHits = wing?.hits ?? 0
     this.wingDislodged = !wing
@@ -156,11 +177,19 @@ export class BattleSim {
     }
     if (this.compression <= 0) return
 
-    // Released: hand the stored squeeze back as motion, directed off the wall
-    // that was holding the puck in.
-    const push = this.compression * RELEASE_EFFICIENCY
-    this.puck.vx += this.releaseX * push
-    this.puck.vy += this.releaseY * push
+    /*
+     * Released. Hand the stored squeeze back as motion, directed off the wall
+     * that was holding the puck in — but not on exactly the same line every
+     * time. A deterministic spring would be one more repeatable pattern to
+     * settle into, which is the thing this is all meant to avoid.
+     */
+    const angle = (this.rand() * 2 - 1) * RELEASE_SPREAD
+    const scale = RELEASE_MIN_SCALE + this.rand() * (1 - RELEASE_MIN_SCALE)
+    const c = Math.cos(angle)
+    const sn = Math.sin(angle)
+    const push = this.compression * RELEASE_EFFICIENCY * scale
+    this.puck.vx += (this.releaseX * c - this.releaseY * sn) * push
+    this.puck.vy += (this.releaseX * sn + this.releaseY * c) * push
     this.compression = 0
   }
 
@@ -216,12 +245,13 @@ export class BattleSim {
     return { x, y }
   }
 
-  private movePaddle(p: Body, target: Vec, dt: number, isPlayer: boolean): void {
+  private movePaddle(p: Body, target: Target, dt: number, isPlayer: boolean): void {
     const goal = this.clampToHalf(target, isPlayer)
     let dx = goal.x - p.x
     let dy = goal.y - p.y
     const dist = Math.hypot(dx, dy)
-    const max = this.cfg.paddle.maxSpeed * dt
+    const speed = Math.min(this.cfg.paddle.maxSpeed, target.speed ?? this.cfg.paddle.maxSpeed)
+    const max = speed * dt
     if (dist > max && dist > 0) {
       dx = (dx / dist) * max
       dy = (dy / dist) * max
@@ -345,7 +375,7 @@ export class BattleSim {
 
   get speed(): number { return Math.hypot(this.puck.vx, this.puck.vy) }
 
-  step(dt: number, playerTarget: Vec, opponentTarget: Vec): StepResult {
+  step(dt: number, playerTarget: Target, opponentTarget: Target): StepResult {
     const { width, length, goalWidth } = this.cfg.table
     const r = this.cfg.puck.radius
     const xLimit = width / 2 - r

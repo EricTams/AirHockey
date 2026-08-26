@@ -2,6 +2,26 @@ import { describe, it, expect } from 'vitest'
 import { BattleSim, type BattleConfig } from '../src/modes/battle/physics'
 import { OpponentAI, baseTarget } from '../src/modes/battle/ai'
 
+/**
+ * The AI returns a heading and a speed, not a destination: unit direction from
+ * where the paddle is now toward the target it handed back.
+ */
+function heading(ai: OpponentAI, sim: BattleSim) {
+  const t = ai.update(sim)
+  const dx = t.x - sim.opponent.x
+  const dy = t.y - sim.opponent.y
+  const d = Math.hypot(dx, dy) || 1
+  return { x: dx / d, y: dy / d, speed: t.speed ?? 0 }
+}
+
+/** Unit direction from the paddle toward an arbitrary point. */
+function toward(sim: BattleSim, p: { x: number; y: number }) {
+  const dx = p.x - sim.opponent.x
+  const dy = p.y - sim.opponent.y
+  const d = Math.hypot(dx, dy) || 1
+  return { x: dx / d, y: dy / d }
+}
+
 const CFG: BattleConfig = {
   id: 'ai',
   opponent: { name: 'Test', ai: 'standard', roamDepth: 0.45, aggression: 0.5 },
@@ -24,12 +44,34 @@ function strike(ai: OpponentAI, sim: BattleSim, x: number, y: number, gap = 1) {
 }
 
 describe('heat', () => {
-  it('starts cold and plays exactly the base behaviour', () => {
+  it('starts cold and heads straight for the base target', () => {
     const sim = new BattleSim(CFG)
     const ai = new OpponentAI(1)
     Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
     expect(ai.heat).toBe(0)
-    expect(ai.update(sim)).toEqual(baseTarget(sim))
+    const h = heading(ai, sim)
+    const want = toward(sim, baseTarget(sim))
+    expect(h.x).toBeCloseTo(want.x, 6)
+    expect(h.y).toBeCloseTo(want.y, 6)
+  })
+
+  it('spends only its share of the speed budget while cold', () => {
+    // Pursuit takes 60%; the rest is reserved for heat to weave with, so heat
+    // can redirect the paddle without ever outrunning it.
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
+    expect(heading(ai, sim).speed).toBeCloseTo(CFG.paddle.maxSpeed * 0.6, 6)
+  })
+
+  it('never asks to exceed the paddle top speed, however hot', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    Object.assign(sim.puck, { x: 1.0, y: 1.5, vx: 0, vy: 0 })
+    for (let i = 0; i < 40; i++) strike(ai, sim, 1.75, 2.1, 5)
+    for (let i = 0; i < 60; i++) {
+      expect(ai.update(sim).speed!).toBeLessThanOrEqual(CFG.paddle.maxSpeed + 1e-9)
+    }
   })
 
   it('builds when strikes land in the same place in quick succession', () => {
@@ -102,8 +144,12 @@ describe('heat', () => {
     expect(ai.heat).toBeGreaterThan(0)
     ai.reset()
     expect(ai.heat).toBe(0)
+    sim.lastOpponentHit = undefined
     Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
-    expect(ai.update(sim)).toEqual(baseTarget(sim))
+    const h = heading(ai, sim)
+    const want = toward(sim, baseTarget(sim))
+    expect(h.x).toBeCloseTo(want.x, 6)
+    expect(h.y).toBeCloseTo(want.y, 6)
   })
 
   it('is deterministic for a given seed, so matches replay identically', () => {
@@ -133,8 +179,10 @@ describe('inert opponents', () => {
   it('stand aside and never heat up', () => {
     const sim = new BattleSim({ ...CFG, opponent: { name: 'Gravy', ai: 'inert' } })
     const ai = new OpponentAI(1)
-    const t = ai.update(sim)
-    expect(Math.abs(t.x)).toBeGreaterThan(CFG.table.width * 0.3)
+    const want = toward(sim, baseTarget(sim))
+    const h = heading(ai, sim)
+    expect(h.x).toBeCloseTo(want.x, 6)
+    expect(h.y).toBeCloseTo(want.y, 6)
     expect(ai.heat).toBe(0)
   })
 })
