@@ -10,7 +10,7 @@ import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type LayerName, type Map
 import type { Tileset } from '../world/tileset'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
-import type { DialogueScript } from './dialogue'
+import { parseDialogue, type DialogueScript } from './dialogue'
 import type { BattleConfig } from './battle/physics'
 
 /** Doc §6.2: a step tweens over 12 frames at 60Hz. */
@@ -127,7 +127,9 @@ export class OverworldMode implements Mode {
       if (slot.def.tint !== undefined) slot.sprite.setTint(slot.def.tint)
       slot.sprite.setFrame(slot.facing, 0)
       this.sprites.add(slot.sprite.mesh)
-      if (slot.def.dialogue) slot.script = await fetchJson<DialogueScript>(slot.def.dialogue)
+      if (slot.def.dialogue) {
+        slot.script = parseDialogue(await fetchJson(slot.def.dialogue), slot.def.dialogue)
+      }
       if (slot.def.battle) slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
     }))
 

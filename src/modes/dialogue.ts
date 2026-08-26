@@ -12,6 +12,33 @@ import { VIRTUAL_W, VIRTUAL_H } from '../core/config'
 export interface DialogueLine { name?: string; face?: string; text: string }
 export interface DialogueScript { id: string; lines: DialogueLine[] }
 
+/**
+ * Validate a dialogue file. Strict and loud, like `parseMap`: the editor writes
+ * these, and a bad save must surface at load rather than as a silently empty
+ * conversation that leaves the player stuck facing an NPC.
+ */
+export function parseDialogue(raw: unknown, path = 'dialogue'): DialogueScript {
+  const d = raw as Partial<DialogueScript>
+  if (!d || typeof d !== 'object') throw new Error(`${path}: not an object`)
+  if (typeof d.id !== 'string' || !d.id) throw new Error(`${path}: missing "id"`)
+  if (!Array.isArray(d.lines)) throw new Error(`${path}: missing "lines" as an array`)
+  d.lines.forEach((line, i) => {
+    const at = `${path}: line[${i}]`
+    if (!line || typeof line !== 'object') throw new Error(`${at}: not an object`)
+    if (typeof line.text !== 'string') throw new Error(`${at}: missing "text"`)
+    if (line.name !== undefined && typeof line.name !== 'string') {
+      throw new Error(`${at}: "name" must be a string`)
+    }
+    if (line.face !== undefined && typeof line.face !== 'string') {
+      throw new Error(`${at}: "face" must be a string`)
+    }
+  })
+  // An empty script would open a box the player cannot advance past: the mode
+  // only leaves on `interact`, and with no line there is nothing to advance.
+  if (d.lines.length === 0) throw new Error(`${path}: has no lines`)
+  return d as DialogueScript
+}
+
 export interface DialoguePayload {
   script: DialogueScript
   /** Where to go when the script ends, and what to hand it. */
@@ -27,6 +54,16 @@ const PAD = 13
 const FACE = 144
 const TEXT_X = PAD + FACE + 14
 const TEXT_W = VIRTUAL_W - TEXT_X - PAD
+/** Top of the first wrapped row, and the pitch between rows. */
+const TEXT_TOP = BOX_Y + 44
+const TEXT_ROW_H = 22
+
+/**
+ * Wrapped rows the box can show. A line longer than this is not truncated — it
+ * draws past the bottom of the box — so the editor warns about it rather than
+ * letting a designer discover it in play.
+ */
+export const MAX_TEXT_ROWS = Math.floor((VIRTUAL_H - PAD - TEXT_TOP) / TEXT_ROW_H)
 
 /** Wrap to the box's inner width. The font is monospace, so this is by count. */
 export function wrapMono(text: string, cols: number): string[] {
@@ -87,6 +124,28 @@ export class DialogueMode implements Mode {
       ? await this.assets.texture(line.face, { label: 'FACE', kind: 'face', width: FACE, height: FACE })
       : undefined
     this.dirty = true
+  }
+
+  /** Columns of text the box fits, which depends on the runtime-built font. */
+  static columns(): number {
+    return Math.floor(TEXT_W / getFont().glyphW)
+  }
+
+  /**
+   * Show one line of a script fully revealed, for the editor's preview.
+   *
+   * Not `enter`: this leaves `next` alone and skips the typewriter, because
+   * what a designer authoring text needs to see is the finished box — whether
+   * the name fits, whether the face is the right one, and above all whether the
+   * text has run off the bottom.
+   */
+  async previewLine(script: DialogueScript, index: number): Promise<{ rows: number }> {
+    this.script = script
+    this.index = index
+    await this.loadLine()
+    this.revealed = this.fullLength
+    this.rebuild()
+    return { rows: this.wrapped.length }
   }
 
   private get fullLength(): number {
@@ -150,7 +209,7 @@ export class DialogueMode implements Mode {
     this.wrapped.forEach((text, i) => {
       const shown = text.slice(0, Math.max(0, Math.min(text.length, left)))
       left -= text.length
-      if (shown) objects.push(makeTextMesh(font, shown, TEXT_X, BOX_Y + 44 + i * 22, 0xe8eefb))
+      if (shown) objects.push(makeTextMesh(font, shown, TEXT_X, TEXT_TOP + i * TEXT_ROW_H, 0xe8eefb))
     })
 
     if (this.revealed >= this.fullLength) {

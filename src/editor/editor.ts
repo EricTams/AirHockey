@@ -12,6 +12,10 @@ import { EditorOverlay } from './overlay'
 import { serializeMap } from './mapFile'
 import { bundleChanges, saveBundle } from './handoff'
 import { EDITOR_CSS, DOCK_PX } from './editorCss'
+import { el, checkbox } from './dom'
+import { DialogueEditor } from './dialogueEditor'
+import type { ModeManager } from '../core/mode'
+import type { DialogueMode } from '../modes/dialogue'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
 
 /**
@@ -43,7 +47,16 @@ export interface EditorHost {
   gfx: Renderer
   assets: Assets
   overworld: OverworldMode
+  modes: ModeManager
+  dialogue: DialogueMode
 }
+
+/** The panels the dock can show. Entities and events join this later. */
+const TABS = [
+  { id: 'map', label: 'Map' },
+  { id: 'dialogue', label: 'Dialogue' },
+] as const
+type Tab = (typeof TABS)[number]['id']
 
 const TOOL_KEYS: Record<Tool, string> = {
   brush: 'B', rect: 'R', fill: 'F', eyedropper: 'I',
@@ -62,6 +75,8 @@ export class Editor {
   private palette?: TilePalette
   private server?: EditorServer
 
+  private tab: Tab = 'map'
+  private dialogueEditor?: DialogueEditor
   private target: EditTarget = 'ground'
   private tool: Tool = 'brush'
   private erasing = false
@@ -87,6 +102,8 @@ export class Editor {
     redo: HTMLButtonElement
     download: HTMLButtonElement
     dot: HTMLElement
+    tabs: Map<Tab, HTMLButtonElement>
+    mapPane: HTMLElement
     gridCheck: HTMLInputElement
     collisionCheck: HTMLInputElement
     cellText: HTMLElement
@@ -110,7 +127,10 @@ export class Editor {
 
   get isOpen(): boolean { return this.doc !== undefined }
   /** Unsaved work, for a caller that wants to warn before throwing it away. */
-  get dirty(): boolean { return this.doc?.dirty ?? false }
+  /** Unsaved work in any pane, for a caller that wants to warn before losing it. */
+  get dirty(): boolean {
+    return (this.doc?.dirty ?? false) || (this.dialogueEditor?.dirty ?? false)
+  }
 
   // --- Session -------------------------------------------------------------
 
@@ -143,6 +163,18 @@ export class Editor {
         : firstPaintable(tileset.cells.length, (i) => isPaintable(tileset, i)),
     )
 
+    this.dialogueEditor = new DialogueEditor({
+      server,
+      modes: this.host.modes,
+      dialogue: this.host.dialogue,
+      currentMap: () => this.host.overworld.currentMap,
+      message: (text, tone) => this.message(text, tone),
+      onDirtyChange: () => this.syncButtons(),
+    })
+
+    // Move the presented frame clear of the dock before framing anything
+    // against it.
+    gfx.setViewportInset(DOCK_PX)
     this.mount()
     this.fitMap()
 
@@ -168,12 +200,18 @@ export class Editor {
     window.removeEventListener('keydown', this.bound.key)
     window.removeEventListener('keyup', this.bound.keyUp)
 
+    gfx.setViewportInset(0)
     this.overlay?.dispose()
     this.dom?.dock.remove()
     this.dom?.bar.remove()
     this.dom?.style.remove()
 
+    // Whatever pane was showing, the game goes back to rendering the world.
+    this.dialogueEditor?.deactivate()
+    this.host.modes.switchNow('overworld')
     this.host.overworld.projection.setZoom(1)
+    this.dialogueEditor = undefined
+    this.tab = 'map'
     this.doc = undefined
     this.overlay = undefined
     this.palette = undefined
@@ -186,44 +224,26 @@ export class Editor {
   // --- Camera --------------------------------------------------------------
 
   /**
-   * Frame the whole map in the part of the canvas the dock is not covering.
+   * Frame the whole map, with half a tile of margin so its border is not flush
+   * against the edge of the screen.
    *
-   * Fitting to the whole viewport would hide the map's left column behind the
-   * dock, which is exactly the column a designer starting a map works in.
+   * The dock does not enter into this: the renderer insets the whole presented
+   * frame past it, so the visible area and the frame are the same thing.
    */
   private fitMap(): void {
     const map = this.doc!.map
-    const hidden = this.hiddenFraction()
-    // framedTiles at zoom 1: the frame is VIRTUAL_W/TILE tiles across.
-    const proj = this.host.overworld.projection
-    const base = { w: proj.framedTiles.w * proj.zoom, h: proj.framedTiles.h * proj.zoom }
-
-    const fitW = (base.w * (1 - hidden)) / (map.width + 1)
-    const fitH = base.h / (map.height + 1)
+    const fitW = (VIRTUAL_W / TILE) / (map.width + 1)
+    const fitH = (VIRTUAL_H / TILE) / (map.height + 1)
     this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(fitW, fitH)))
     this.camX = (map.width - 1) / 2
     this.camY = (map.height - 1) / 2
     this.applyCamera()
   }
 
-  /** How much of the frame's width the dock sits over, as a fraction. */
-  private hiddenFraction(): number {
-    const frameWidth = VIRTUAL_W * this.host.gfx.integerScale
-    const rect = this.host.gfx.canvas.getBoundingClientRect()
-    // The frame is centred in the canvas, so only the part of the dock that
-    // actually overlaps it counts.
-    const frameLeft = rect.left + (rect.width - frameWidth) / 2
-    const overlap = Math.max(0, Math.min(DOCK_PX - frameLeft, frameWidth))
-    return frameWidth > 0 ? overlap / frameWidth : 0
-  }
-
   private applyCamera(): void {
     const proj = this.host.overworld.projection
     proj.setZoom(this.zoom)
-    // Shift east by half of what the dock covers, so the map sits centred in
-    // the visible strip rather than in the frame the dock is hiding part of.
-    const framedW = (VIRTUAL_W / TILE) / this.zoom
-    proj.lookAt(this.camX + (framedW * this.hiddenFraction()) / 2, this.camY)
+    proj.lookAt(this.camX, this.camY)
     if (this.dom) this.dom.zoomText.textContent = `${this.zoom.toFixed(2)}x`
   }
 
@@ -245,7 +265,7 @@ export class Editor {
   // --- Pointer -------------------------------------------------------------
 
   private onPointerDown(e: PointerEvent): void {
-    if (!this.doc) return
+    if (!this.doc || this.tab !== 'map') return
     // Middle button, or space held, pans. Anything else paints.
     if (e.button === 1 || e.button === 2 || this.spaceHeld) {
       this.pan = { clientX: e.clientX, clientY: e.clientY, camX: this.camX, camY: this.camY }
@@ -278,7 +298,7 @@ export class Editor {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.doc) return
+    if (!this.doc || this.tab !== 'map') return
 
     if (this.pan) {
       // Pan in world units so the drag tracks the cursor at any zoom.
@@ -324,7 +344,7 @@ export class Editor {
   }
 
   private onWheel(e: WheelEvent): void {
-    if (!this.doc) return
+    if (!this.doc || this.tab !== 'map') return
     e.preventDefault()
     // Zoom about the cursor: keep whatever tile is under it under it, or
     // zooming in on a corner of the map walks away from what you were looking at.
@@ -470,6 +490,12 @@ export class Editor {
     }
   }
 
+  /** Ctrl-S saves whatever pane is showing. */
+  private async saveActive(): Promise<void> {
+    if (this.tab === 'dialogue') await this.dialogueEditor?.save()
+    else await this.save()
+  }
+
   // --- Keyboard ------------------------------------------------------------
 
   private spaceHeld = false
@@ -480,14 +506,17 @@ export class Editor {
     if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
 
     const mod = e.metaKey || e.ctrlKey
-    if (mod && e.code === 'KeyS') { e.preventDefault(); void this.save(); return }
-    if (mod && e.code === 'KeyZ') {
+    if (mod && e.code === 'KeyS') { e.preventDefault(); void this.saveActive(); return }
+    // Undo belongs to the pane that is showing. The dialogue pane's own fields
+    // handle text undo natively, and stealing the shortcut would break that.
+    if (mod && this.tab === 'map' && (e.code === 'KeyZ' || e.code === 'KeyY')) {
       e.preventDefault()
-      if (e.shiftKey) this.redo(); else this.undo()
+      if (e.code === 'KeyY' || e.shiftKey) this.redo(); else this.undo()
       return
     }
-    if (mod && e.code === 'KeyY') { e.preventDefault(); this.redo(); return }
     if (mod) return
+    // Everything below paints, and only the map pane paints.
+    if (this.tab !== 'map') return
 
     switch (e.code) {
       case 'Space': this.spaceHeld = true; e.preventDefault(); break
@@ -527,6 +556,33 @@ export class Editor {
 
   // --- Chrome --------------------------------------------------------------
 
+  /**
+   * Show one pane. Leaving the map pane hides the editing overlay and hands the
+   * screen to whatever the new pane wants to draw — for dialogue, the game's own
+   * box over the frozen world.
+   */
+  private async setTab(tab: Tab): Promise<void> {
+    this.tab = tab
+    const dom = this.dom
+    if (dom) {
+      for (const [id, b] of dom.tabs) b.setAttribute('aria-pressed', String(id === tab))
+      dom.mapPane.hidden = tab !== 'map'
+    }
+    if (this.dialogueEditor) this.dialogueEditor.root.hidden = tab !== 'dialogue'
+
+    if (tab === 'map') {
+      this.dialogueEditor?.deactivate()
+      this.host.modes.switchNow('overworld')
+      if (this.overlay) this.overlay.group.visible = true
+      this.applyCamera()
+    } else {
+      // The grid over a world that is only a backdrop for the box is noise.
+      if (this.overlay) this.overlay.group.visible = false
+      if (tab === 'dialogue') await this.dialogueEditor?.activate()
+    }
+    this.syncButtons()
+  }
+
   private setTool(tool: Tool): void {
     this.tool = tool
     this.syncButtons()
@@ -563,6 +619,18 @@ export class Editor {
     const dock = el('div', { class: 'ed-dock' })
     dock.append(el('h4', {}, this.doc!.map.id, dot))
 
+    const tabs = new Map<Tab, HTMLButtonElement>()
+    const tabRow = el('div', { class: 'ed-tabrow' })
+    for (const { id, label } of TABS) {
+      const b = el('button', { type: 'button' }, label)
+      b.onclick = () => { b.blur(); void this.setTab(id) }
+      tabs.set(id, b)
+      tabRow.append(b)
+    }
+    dock.append(tabRow)
+
+    const mapPane = el('div', { class: 'ed-pane' })
+
     const tools = new Map<Tool, HTMLButtonElement>()
     const toolRow = el('div', { class: 'ed-seg' })
     for (const tool of TOOLS) {
@@ -574,7 +642,7 @@ export class Editor {
     const erase = el('button', { type: 'button' }, 'Erase', el('span', { class: 'ed-key' }, 'E'))
     erase.onclick = () => { erase.blur(); this.setErasing(!this.erasing) }
     const eraseRow = el('div', { class: 'ed-seg' }, erase)
-    dock.append(el('div', { class: 'ed-sec' }, el('label', {}, 'Tool'), toolRow, eraseRow))
+    mapPane.append(el('div', { class: 'ed-sec' }, el('label', {}, 'Tool'), toolRow, eraseRow))
 
     const targets = new Map<EditTarget, HTMLButtonElement>()
     const targetRow = el('div', { class: 'ed-seg' })
@@ -586,10 +654,10 @@ export class Editor {
     }
     const grid = checkbox('Grid (G)', true, (on) => this.overlay?.setGridVisible(on))
     const coll = checkbox('Collision (V)', false, (on) => this.overlay?.setCollisionVisible(on))
-    dock.append(el('div', { class: 'ed-sec' }, el('label', {}, 'Layer'), targetRow, grid.row, coll.row))
+    mapPane.append(el('div', { class: 'ed-sec' }, el('label', {}, 'Layer'), targetRow, grid.row, coll.row))
 
     const palWrap = el('div', { class: 'ed-pal-wrap' }, this.palette!.canvas)
-    dock.append(palWrap)
+    mapPane.append(palWrap)
 
     const undo = el('button', { class: 'ed-icon', type: 'button', title: 'Undo' }, '↶')
     undo.onclick = () => { undo.blur(); this.undo() }
@@ -597,12 +665,11 @@ export class Editor {
     redo.onclick = () => { redo.blur(); this.redo() }
     const save = el('button', { class: 'ed-save', type: 'button' }, 'Save')
     save.onclick = () => { save.blur(); void this.save() }
-    dock.append(el('div', { class: 'ed-foot2' }, undo, redo, save))
+    mapPane.append(el('div', { class: 'ed-foot2' }, undo, redo, save))
 
     const download = el('button', { class: 'ed-second', type: 'button' },
       'Download my changes')
     download.onclick = () => { download.blur(); void this.downloadChanges() }
-    dock.append(el('div', { class: 'ed-foot3' }, download))
 
     const cellText = el('span', {}, '–')
     const tileText = el('span', {}, '–')
@@ -614,9 +681,14 @@ export class Editor {
       el('span', {}, el('b', {}, 'zoom '), zoomText),
       message)
 
+    dock.append(mapPane, this.dialogueEditor!.root)
+    // The download packs the whole content folder, so it belongs to the session
+    // rather than to whichever pane happens to be showing.
+    dock.append(el('div', { class: 'ed-foot3' }, download))
+
     this.root.append(dock, bar)
     this.dom = {
-      style, dock, bar, tools, targets, erase, save, undo, redo, download, dot,
+      style, dock, bar, tabs, mapPane, tools, targets, erase, save, undo, redo, download, dot,
       gridCheck: grid.input, collisionCheck: coll.input,
       cellText, tileText, zoomText, message,
     }
@@ -624,6 +696,7 @@ export class Editor {
     // The sheet is 512px wide and the dock is 300; fit it rather than making
     // the designer scroll sideways to reach half the palette.
     this.palette!.fitWidth(palWrap.clientWidth - 26)
+    void this.setTab('map')
     this.syncButtons()
     this.updateStatus()
   }
@@ -639,7 +712,8 @@ export class Editor {
     dom.redo.disabled = !doc.canRedo
     dom.save.disabled = this.saving || !doc.dirty
     dom.save.textContent = this.saving ? 'Saving…' : doc.dirty ? 'Save' : 'Saved'
-    dom.dot.dataset.dirty = doc.dirty ? '1' : '0'
+    const anyDirty = doc.dirty || (this.dialogueEditor?.dirty ?? false)
+    dom.dot.dataset.dirty = anyDirty ? '1' : '0'
     // Selecting the collision layer turns its overlay on; the checkbox has to
     // follow, or it claims the thing on screen is off.
     dom.gridCheck.checked = this.overlay?.isGridVisible ?? true
@@ -690,19 +764,3 @@ function firstPaintable(count: number, ok: (i: number) => boolean): number {
 
 function cap(s: string): string { return s[0]!.toUpperCase() + s.slice(1) }
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v)
-  for (const kid of kids) node.append(kid)
-  return node
-}
-
-function checkbox(label: string, on: boolean, onChange: (on: boolean) => void) {
-  const input = el('input', { type: 'checkbox' })
-  input.checked = on
-  input.onchange = () => onChange(input.checked)
-  const row = el('label', { class: 'ed-check' }, input, label)
-  return { row, input }
-}

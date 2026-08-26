@@ -41,5 +41,18 @@ export class ModeManager {
     this.current?.update(dt)
   }
 
+  /**
+   * Apply a pending switch now rather than at the next tick.
+   *
+   * Transitions are normally deferred so a mode can request one from inside its
+   * own update() without re-entrancy. The editor has the opposite problem: it
+   * runs while the loop is paused, so no update() is ever coming, and a
+   * deferred switch would simply never happen.
+   */
+  switchNow(name: string, payload?: unknown): void {
+    this.switchTo(name, payload)
+    this.applyPending()
+  }
+
   render(): void { this.current?.render() }
 }

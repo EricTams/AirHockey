@@ -88,6 +88,8 @@ loop.start()
  * editor's back.
  */
 let session: Editor | undefined
+/** Debug overlay state to put back when the editor closes. */
+let debugWasVisible = false
 /** Whether content reads have already been pointed at the helper this session. */
 let routed = false
 
@@ -101,6 +103,10 @@ const editor = mountEditorUi({
     }
     loop.setPaused(true)
     input.reset()
+    // The readout is a dev tool, and it sits on top of the editor's own
+    // chrome. Editing is the designer's screen, not ours.
+    debugWasVisible = debug.visible
+    debug.setVisible(false)
 
     // Point content reads at the designer's own folder, then rebuild the world
     // from it. Anything they had already edited was loaded from the site during
@@ -116,7 +122,7 @@ const editor = mountEditorUi({
       routed = true
     }
 
-    session ??= new Editor({ gfx, assets, overworld }, editor.root)
+    session ??= new Editor({ gfx, assets, overworld, modes, dialogue }, editor.root)
     await session.open(server)
 
     const edited = server.editedPaths?.size ?? 0
@@ -129,6 +135,7 @@ const editor = mountEditorUi({
     // site shipped. The scene already holds every edit, saved or not, so there
     // is nothing to reload.
     session?.close()
+    debug.setVisible(debugWasVisible)
     input.reset()   // drop anything held while the editor had focus
     loop.setPaused(false)
     console.log('[editor] resumed, playing your content')

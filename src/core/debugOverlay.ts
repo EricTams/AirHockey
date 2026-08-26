@@ -16,9 +16,11 @@ export class DebugOverlay {
     document.body.appendChild(this.el)
   }
 
-  toggle(): void {
-    this.visible = !this.visible
-    this.el.style.display = this.visible ? 'block' : 'none'
+  toggle(): void { this.setVisible(!this.visible) }
+
+  setVisible(on: boolean): void {
+    this.visible = on
+    this.el.style.display = on ? 'block' : 'none'
   }
 
   set(lines: Record<string, string | number>): void {

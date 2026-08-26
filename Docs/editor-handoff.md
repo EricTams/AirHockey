@@ -48,6 +48,9 @@ loads `public/data/maps/overworld.json`.
 | `src/editor/overlay.ts` | Grid, border, collision mask, tool cursor |
 | `src/editor/palette.ts` | The sheet drawn into a canvas, click to select |
 | `src/editor/zip.ts`, `handoff.ts` | "Download my changes" |
+| `src/editor/dialogueEditor.ts` | Line list, fields, live preview |
+| `src/editor/dialogueDoc.ts` | The script being edited, snapshot undo |
+| `src/editor/dialogueFile.ts` | Diffable dialogue serialisation |
 
 **The helper works.** One dependency-free file the designer downloads from the
 published site. Creates `airhockey-content/`, writes only there, no clone and no
@@ -73,10 +76,16 @@ paint collision, save, exit, walk into it, get blocked.
 **The work gets back.** "Download my changes" zips the content folder under the
 same paths the game loads by, so it unzips straight over `public/`.
 
+**Dialogue editing works.** Line list with reorder, add, duplicate and delete;
+speaker, portrait and text fields; live preview through the real
+`DialogueMode`, including a warning when a line wraps past the bottom of the
+box. `parseDialogue` now validates these files on load as strictly as maps.
+
+The dock has tabs (Map, Dialogue) — that is where entities and events go.
+
 ### Not started
 
-Tileset import, entity placement, dialogue editing, multiple maps, events.
-That is section 5.
+Tileset import, entity placement, multiple maps, events. That is section 5.
 
 ---
 
@@ -153,7 +162,7 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 
 ## 5. What to build next
 
-**Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → 5.4 dialogue → 5.3 entities
+**Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → ~~5.4 dialogue~~ → 5.3 entities
 → 5.2 import → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
 designer something to react to a stage sooner. Events last, per decision 10.
 
@@ -231,7 +240,7 @@ quad `w × h` tiles, UVs from `propUv`, placed with `Projection.placeBillboard`,
 Then drag-to-place, and an inspector for NPC fields (sprite, facing, dialogue
 file, battle file, tint).
 
-### 5.4 Dialogue editor
+### 5.4 Dialogue editor — DONE
 
 `public/data/dialogue/*.json` is a linear list of `{name, face, text}`. A line
 list with reordering, plus live preview through the real `DialogueMode`
