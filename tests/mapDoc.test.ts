@@ -17,7 +17,7 @@ describe('MapDoc editing', () => {
     d.beginStroke('brush')
     expect(d.set('ground', 1, 1, 7)).toBe(true)
     expect(d.get('ground', 1, 1)).toBe(7)
-    expect(d.endStroke()).toEqual({ layers: ['ground'], collision: false, entities: false })
+    expect(d.endStroke()).toEqual({ layers: ['ground'], collision: false, entities: false, world: false })
   })
 
   it('drops writes that change nothing, so undo does not fill with no-ops', () => {
@@ -90,7 +90,7 @@ describe('MapDoc editing', () => {
     const d = doc()
     d.beginStroke('collision')
     d.set(COLLISION, 0, 0, 1)
-    expect(d.endStroke()).toEqual({ layers: [], collision: true, entities: false })
+    expect(d.endStroke()).toEqual({ layers: [], collision: true, entities: false, world: false })
     expect(d.map.collision[0]).toBe(1)
   })
 
@@ -109,8 +109,8 @@ describe('MapDoc entity edits', () => {
 
   it('records an entity change as one undoable action', () => {
     const d = doc()
-    const touched = d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
-    expect(touched).toEqual({ layers: [], collision: false, entities: true })
+    const touched = d.editMap('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    expect(touched).toEqual({ layers: [], collision: false, entities: true, world: false })
     expect(d.map.npcs).toHaveLength(1)
     d.undo()
     expect(d.map.npcs).toHaveLength(0)
@@ -120,7 +120,7 @@ describe('MapDoc entity edits', () => {
 
   it('drops an edit that changed nothing', () => {
     const d = doc()
-    expect(isNothing(d.editEntities('noop', () => {}))).toBe(true)
+    expect(isNothing(d.editMap('noop', () => {}))).toBe(true)
     expect(d.canUndo).toBe(false)
   })
 
@@ -129,7 +129,7 @@ describe('MapDoc entity edits', () => {
     // leave the scene rebuilding from the old one.
     const d = doc()
     const before = d.map.npcs
-    d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    d.editMap('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
     d.undo()
     expect(d.map.npcs).toBe(before)
   })
@@ -137,7 +137,7 @@ describe('MapDoc entity edits', () => {
   it('interleaves with tile strokes in the order they happened', () => {
     const d = doc()
     d.beginStroke('paint'); d.set('ground', 0, 0, 7); d.endStroke()
-    d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    d.editMap('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
 
     d.undo()
     expect(d.map.npcs).toHaveLength(0)
@@ -146,10 +146,28 @@ describe('MapDoc entity edits', () => {
     expect(d.get('ground', 0, 0)).toBe(14)
   })
 
+  it('flags a tileset swap as needing the whole world rebuilt', () => {
+    // Every tile index in the map means something else afterwards, so
+    // rebuilding the entities is not enough.
+    const d = doc()
+    const touched = d.editMap('tileset', (m) => { m.tileset = 'data/tilesets/other.json' })
+    expect(touched.world).toBe(true)
+    d.undo()
+    expect(d.map.tileset).toBe('data/tilesets/terrain.json')
+  })
+
+  it('undoes a moved player start', () => {
+    const d = doc()
+    d.editMap('start', (m) => { m.playerStart = { x: 0, y: 0, facing: 'left' } })
+    expect(d.map.playerStart).toEqual({ x: 0, y: 0, facing: 'left' })
+    d.undo()
+    expect(d.map.playerStart).toEqual({ x: 2, y: 1, facing: 'down' })
+  })
+
   it('undoes a field change back to what it was', () => {
     const d = doc()
-    d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
-    d.editEntities('facing', (m) => { m.npcs[0]!.facing = 'left' })
+    d.editMap('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    d.editMap('facing', (m) => { m.npcs[0]!.facing = 'left' })
     d.undo()
     expect(d.map.npcs[0]!.facing).toBe('down')
   })

@@ -49,6 +49,13 @@ export class Assets {
   private loadImage(url: string): Promise<THREE.Texture> {
     return new Promise((resolve, reject) => {
       const img = new Image()
+      // While editing, textures come from the helper on 127.0.0.1 — a different
+      // origin from the page. WebGL refuses to upload an image that is not
+      // CORS-clean, and the refusal is silent: the texture samples as
+      // transparent black, so the world goes blank rather than erroring. The
+      // helper answers with access-control-allow-origin, so an anonymous
+      // request succeeds; on same-origin site assets this changes nothing.
+      img.crossOrigin = 'anonymous'
       img.onload = () => {
         const tex = new THREE.Texture(img)
         tex.magFilter = THREE.NearestFilter

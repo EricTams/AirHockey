@@ -65,6 +65,15 @@ export const EDITOR_CSS = `
   padding: 6px 8px; color: #dbe6f5; font: inherit; font-size: 11px; line-height: 1.5;
   resize: vertical; }
 .ed-textarea:focus { outline: none; border-color: #4a7bb5; }
+.ed-file { flex: 1; min-width: 0; color: #97a7bb; font: inherit; font-size: 11px; }
+.ed-file::file-selector-button { margin-right: 8px; padding: 5px 10px; border-radius: 5px;
+  border: 1px solid #2a3444; background: #1a2230; color: #d3dfec; font: inherit;
+  font-size: 11px; cursor: pointer; }
+.ed-file::file-selector-button:hover { background: #212b3b; }
+.ed-sheet { display: block; image-rendering: pixelated; cursor: crosshair;
+  border: 1px solid #222c3a; touch-action: none; }
+.ed-propline { grid-template-columns: 1fr 34px 16px 24px; align-items: center; }
+.ed-propline .ed-input2 { padding: 3px 6px; }
 .ed-warn { margin-top: 8px; padding: 6px 8px; border-radius: 5px; font-size: 11px;
   background: #38240f; border: 1px solid #6b4718; color: #f0c489; }
 .ed-sec > label { display: block; font-size: 10px; text-transform: uppercase;

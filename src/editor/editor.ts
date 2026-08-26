@@ -3,7 +3,8 @@ import type { Assets } from '../core/assets'
 import type { OverworldMode } from '../modes/overworld'
 import type { EditorServer } from './server'
 import { parseMap, type LayerName } from '../world/map'
-import { EMPTY_TILE, isPaintable } from '../world/tileset'
+import { EMPTY_TILE, isPaintable, parseTileset } from '../world/tileset'
+import { fetchJson } from '../core/paths'
 import { MIN_ZOOM, MAX_ZOOM } from '../world/projection'
 import { MapDoc, COLLISION, isNothing, type EditTarget, type Touched } from './mapDoc'
 import { TOOLS, toolCells, rectCells, isPreviewTool, type Cell, type Tool } from './tools'
@@ -15,6 +16,7 @@ import { EDITOR_CSS, DOCK_PX } from './editorCss'
 import { el, checkbox } from './dom'
 import { DialogueEditor } from './dialogueEditor'
 import { EntityEditor } from './entityEditor'
+import { TilesetEditor } from './tilesetEditor'
 import type { ModeManager } from '../core/mode'
 import type { DialogueMode } from '../modes/dialogue'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
@@ -57,6 +59,7 @@ const TABS = [
   { id: 'map', label: 'Map' },
   { id: 'entities', label: 'Entities' },
   { id: 'dialogue', label: 'Dialogue' },
+  { id: 'tileset', label: 'Sheet' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
 
@@ -80,6 +83,7 @@ export class Editor {
   private tab: Tab = 'map'
   private dialogueEditor?: DialogueEditor
   private entityEditor?: EntityEditor
+  private tilesetEditor?: TilesetEditor
   private target: EditTarget = 'ground'
   private tool: Tool = 'brush'
   private erasing = false
@@ -133,7 +137,9 @@ export class Editor {
   /** Unsaved work, for a caller that wants to warn before throwing it away. */
   /** Unsaved work in any pane, for a caller that wants to warn before losing it. */
   get dirty(): boolean {
-    return (this.doc?.dirty ?? false) || (this.dialogueEditor?.dirty ?? false)
+    return (this.doc?.dirty ?? false)
+      || (this.dialogueEditor?.dirty ?? false)
+      || (this.tilesetEditor?.dirty ?? false)
   }
 
   // --- Session -------------------------------------------------------------
@@ -178,6 +184,30 @@ export class Editor {
       paintMarks: (marks, selected) => {
         this.overlay?.setMarks(marks)
         this.overlay?.setCursor(selected ? [selected] : [])
+      },
+      message: (text, tone) => this.message(text, tone),
+    })
+
+    this.tilesetEditor = new TilesetEditor({
+      server,
+      assets: this.host.assets,
+      current: () => this.host.overworld.currentTileset,
+      currentPath: () => this.doc?.map.tileset ?? '',
+      useForMap: (path) => {
+        const touched = this.doc?.editMap('use sheet', (map) => { map.tileset = path })
+        if (touched && !isNothing(touched)) {
+          this.refresh(touched)
+          this.syncButtons()
+          this.message(`The map now uses ${path}`, 'ok')
+        }
+      },
+      reloadWorld: async () => {
+        // The map's tiles and props are drawn through the tileset, so a saved
+        // rider only shows once the world is rebuilt from it.
+        await this.host.overworld.reload()
+        this.doc = new MapDoc(this.host.overworld.currentMapPath, this.host.overworld.currentMap)
+        this.overlay?.setMap(this.doc.map)
+        this.syncButtons()
       },
       message: (text, tone) => this.message(text, tone),
     })
@@ -228,10 +258,12 @@ export class Editor {
     // Whatever pane was showing, the game goes back to rendering the world.
     this.dialogueEditor?.deactivate()
     this.entityEditor?.deactivate()
+    this.tilesetEditor?.deactivate()
     this.host.modes.switchNow('overworld')
     this.host.overworld.projection.setZoom(1)
     this.dialogueEditor = undefined
     this.entityEditor = undefined
+    this.tilesetEditor = undefined
     this.tab = 'map'
     this.doc = undefined
     this.overlay = undefined
@@ -391,6 +423,7 @@ export class Editor {
     return this.tab === 'map' || this.tab === 'entities'
   }
 
+
   /** World tiles covered by one client pixel, for panning. */
   private tilesPerPixel(): number {
     const { h } = this.host.overworld.projection.framedTiles
@@ -415,6 +448,7 @@ export class Editor {
         layers: layersOf(this.target),
         collision: this.target === COLLISION,
         entities: false,
+        world: false,
       })
     }
   }
@@ -434,6 +468,12 @@ export class Editor {
 
   /** Push document changes into the meshes and the overlay. */
   private refresh(touched: Touched): void {
+    if (touched.world) {
+      // A different tileset re-reads every index in the map; nothing short of
+      // building the world again is correct.
+      void this.rebuildWorld()
+      return
+    }
     if (touched.layers.length > 0) this.host.overworld.rebuildLayers(touched.layers)
     if (touched.collision) this.overlay?.setCollision(this.doc!.map)
     if (touched.entities) {
@@ -442,6 +482,27 @@ export class Editor {
       void this.host.overworld.rebuildEntities()
         .then(() => this.entityEditor?.refresh())
         .catch((err: Error) => this.message(`Could not rebuild: ${err.message}`, 'err'))
+    }
+  }
+
+  /**
+   * Rebuild the scene from the document's map, keeping the same MapDoc so the
+   * undo stack survives. Used when a change invalidates the tile meshes
+   * wholesale, such as pointing the map at another sheet.
+   */
+  private async rebuildWorld(): Promise<void> {
+    const doc = this.doc
+    if (!doc) return
+    try {
+      const tileset = await loadTileset(doc.map.tileset)
+      await this.host.overworld.applyMap(doc.map, tileset)
+      this.overlay?.setMap(doc.map)
+      const sheet = await this.host.assets.texture(tileset.image)
+      this.palette?.setTileset(tileset, sheet.image as CanvasImageSource)
+      this.entityEditor?.refresh()
+      this.applyCamera()
+    } catch (err) {
+      this.message(`Could not rebuild: ${(err as Error).message}`, 'err')
     }
   }
 
@@ -537,6 +598,7 @@ export class Editor {
   /** Ctrl-S saves whatever pane is showing. */
   private async saveActive(): Promise<void> {
     if (this.tab === 'dialogue') await this.dialogueEditor?.save()
+    else if (this.tab === 'tileset') await this.tilesetEditor?.save()
     else await this.save()
   }
 
@@ -614,13 +676,15 @@ export class Editor {
       for (const [id, b] of dom.tabs) b.setAttribute('aria-pressed', String(id === tab))
       dom.mapPane.hidden = tab !== 'map'
       // Undo and Save act on the map document, which both of these panes edit.
-      dom.docFoot.hidden = tab === 'dialogue'
+      dom.docFoot.hidden = tab === 'dialogue' || tab === 'tileset'
     }
     if (this.dialogueEditor) this.dialogueEditor.root.hidden = tab !== 'dialogue'
     if (this.entityEditor) this.entityEditor.root.hidden = tab !== 'entities'
+    if (this.tilesetEditor) this.tilesetEditor.root.hidden = tab !== 'tileset'
 
     if (tab !== 'dialogue') this.dialogueEditor?.deactivate()
     if (tab !== 'entities') this.entityEditor?.deactivate()
+    if (tab !== 'tileset') this.tilesetEditor?.deactivate()
 
     if (tab === 'dialogue') {
       // The grid over a world that is only a backdrop for the box is noise.
@@ -632,6 +696,7 @@ export class Editor {
       this.applyCamera()
       if (tab === 'map') this.overlay?.setMarks([])
       if (tab === 'entities') this.entityEditor?.activate()
+      if (tab === 'tileset') await this.tilesetEditor?.activate()
     }
     this.syncButtons()
   }
@@ -734,7 +799,8 @@ export class Editor {
       el('span', {}, el('b', {}, 'zoom '), zoomText),
       message)
 
-    dock.append(mapPane, this.entityEditor!.root, this.dialogueEditor!.root, docFoot)
+    dock.append(mapPane, this.entityEditor!.root, this.dialogueEditor!.root,
+      this.tilesetEditor!.root, docFoot)
     // The download packs the whole content folder, so it belongs to the session
     // rather than to whichever pane happens to be showing.
     dock.append(el('div', { class: 'ed-foot3' }, download))
@@ -766,7 +832,9 @@ export class Editor {
     dom.redo.disabled = !doc.canRedo
     dom.save.disabled = this.saving || !doc.dirty
     dom.save.textContent = this.saving ? 'Saving…' : doc.dirty ? 'Save' : 'Saved'
-    const anyDirty = doc.dirty || (this.dialogueEditor?.dirty ?? false)
+    const anyDirty = doc.dirty
+      || (this.dialogueEditor?.dirty ?? false)
+      || (this.tilesetEditor?.dirty ?? false)
     dom.dot.dataset.dirty = anyDirty ? '1' : '0'
     // Selecting the collision layer turns its overlay on; the checkbox has to
     // follow, or it claims the thing on screen is off.
@@ -800,6 +868,11 @@ export class Editor {
       }
     }, MESSAGE_MS)
   }
+}
+
+/** Load a tileset rider by content path, through whatever source is installed. */
+async function loadTileset(path: string) {
+  return parseTileset(await fetchJson(path), path)
 }
 
 /** Keys that only move the view, so they work on any world-facing pane. */

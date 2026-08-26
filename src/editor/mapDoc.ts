@@ -30,21 +30,30 @@ export interface CellEdit {
 }
 
 /**
- * The map's entities, snapshotted whole.
+ * Everything about a map that is not a grid, snapshotted whole: its entities,
+ * its player start, its id and which tileset it uses.
  *
  * Cells are recorded as before/after values because a stroke touches hundreds
- * of them; entities are a handful of small objects, and their edits are
- * structural — adding one, moving one, retargeting its dialogue — which a
- * per-field diff would model badly for no saving.
+ * of them. This is a handful of small objects, edited structurally — adding an
+ * NPC, moving one, retargeting its dialogue — which a per-field diff would
+ * model badly for no saving.
  */
-export interface EntityEdit {
-  kind: 'entities'
-  from: { npcs: MapNpc[]; props: MapProp[] }
-  to: { npcs: MapNpc[]; props: MapProp[] }
+export interface MapState {
+  id: string
+  tileset: string
+  playerStart: GameMap['playerStart']
+  npcs: MapNpc[]
+  props: MapProp[]
+}
+
+export interface StateEdit {
+  kind: 'state'
+  from: MapState
+  to: MapState
 }
 
 /** One undoable action. */
-export type Edit = CellEdit | EntityEdit
+export type Edit = CellEdit | StateEdit
 
 export interface Stroke {
   label: string
@@ -56,9 +65,15 @@ export interface Touched {
   layers: LayerName[]
   collision: boolean
   entities: boolean
+  /**
+   * The map now points at a different tileset, so every tile index in it means
+   * something else and the whole world has to be built again. Rebuilding the
+   * entities is not enough.
+   */
+  world: boolean
 }
 
-const NOTHING: Touched = { layers: [], collision: false, entities: false }
+const NOTHING: Touched = { layers: [], collision: false, entities: false, world: false }
 
 export class MapDoc {
   private undoStack: Stroke[] = []
@@ -125,20 +140,21 @@ export class MapDoc {
   }
 
   /**
-   * Run a change to the map's NPCs and props as one undoable action.
+   * Run a change to the map's entities, player start, id or tileset as one
+   * undoable action.
    *
-   * Self-contained rather than part of an open stroke: entity edits come from
-   * buttons and drags in the inspector, never from the middle of a brush
-   * stroke, and mixing the two would let an undo take back half of each.
+   * Self-contained rather than part of an open stroke: these come from buttons
+   * and drags in the inspector, never from the middle of a brush stroke, and
+   * mixing the two would let an undo take back half of each.
    */
-  editEntities(label: string, mutate: (map: GameMap) => void): Touched {
-    const from = snapshotEntities(this.map)
+  editMap(label: string, mutate: (map: GameMap) => void): Touched {
+    const from = snapshotState(this.map)
     mutate(this.map)
-    const to = snapshotEntities(this.map)
+    const to = snapshotState(this.map)
     if (JSON.stringify(from) === JSON.stringify(to)) return NOTHING
-    this.undoStack.push({ label, edits: [{ kind: 'entities', from, to }] })
+    this.undoStack.push({ label, edits: [{ kind: 'state', from, to }] })
     this.redoStack = []
-    return { layers: [], collision: false, entities: true }
+    return { layers: [], collision: false, entities: true, world: from.tileset !== to.tileset }
   }
 
   /** Close the stroke and report what it touched. An empty stroke is dropped. */
@@ -173,7 +189,7 @@ export class MapDoc {
     const stroke = this.redoStack.pop()
     if (!stroke) return NOTHING
     for (const edit of stroke.edits) {
-      if (edit.kind === 'entities') restoreEntities(this.map, edit.to)
+      if (edit.kind === 'state') restoreState(this.map, edit.to)
       else this.cells(edit.target)[edit.index] = edit.to
     }
     this.undoStack.push(stroke)
@@ -185,20 +201,26 @@ export class MapDoc {
 function revert(doc: MapDoc, stroke: Stroke): void {
   for (let i = stroke.edits.length - 1; i >= 0; i--) {
     const edit = stroke.edits[i]!
-    if (edit.kind === 'entities') restoreEntities(doc.map, edit.from)
+    if (edit.kind === 'state') restoreState(doc.map, edit.from)
     else doc.cells(edit.target)[edit.index] = edit.from
   }
 }
 
-function snapshotEntities(map: GameMap): { npcs: MapNpc[]; props: MapProp[] } {
+function snapshotState(map: GameMap): MapState {
   return {
+    id: map.id,
+    tileset: map.tileset,
+    playerStart: { ...map.playerStart },
     npcs: map.npcs.map((n) => ({ ...n })),
     props: map.props.map((p) => ({ ...p })),
   }
 }
 
 /** Replace in place: the scene and the document share these array objects. */
-function restoreEntities(map: GameMap, state: { npcs: MapNpc[]; props: MapProp[] }): void {
+function restoreState(map: GameMap, state: MapState): void {
+  map.id = state.id
+  map.tileset = state.tileset
+  map.playerStart = { ...state.playerStart }
   map.npcs.splice(0, map.npcs.length, ...state.npcs.map((n) => ({ ...n })))
   map.props.splice(0, map.props.length, ...state.props.map((p) => ({ ...p })))
 }
@@ -207,12 +229,15 @@ function touchedBy(stroke: Stroke): Touched {
   const layers = new Set<LayerName>()
   let collision = false
   let entities = false
+  let world = false
   for (const edit of stroke.edits) {
-    if (edit.kind === 'entities') entities = true
-    else if (edit.target === COLLISION) collision = true
+    if (edit.kind === 'state') {
+      entities = true
+      world ||= edit.from.tileset !== edit.to.tileset
+    } else if (edit.target === COLLISION) collision = true
     else layers.add(edit.target)
   }
-  return { layers: LAYER_NAMES.filter((n) => layers.has(n)), collision, entities }
+  return { layers: LAYER_NAMES.filter((n) => layers.has(n)), collision, entities, world }
 }
 
 /** Merge two touched sets, for callers applying several actions at once. */
@@ -222,12 +247,13 @@ export function mergeTouched(a: Touched, b: Touched): Touched {
     layers: LAYER_NAMES.filter((n) => layers.has(n)),
     collision: a.collision || b.collision,
     entities: a.entities || b.entities,
+    world: a.world || b.world,
   }
 }
 
 /** True if a stroke changed nothing worth rebuilding for. */
 export function isNothing(t: Touched): boolean {
-  return t.layers.length === 0 && !t.collision && !t.entities
+  return t.layers.length === 0 && !t.collision && !t.entities && !t.world
 }
 
 /**

@@ -53,6 +53,9 @@ loads `public/data/maps/overworld.json`.
 | `src/editor/dialogueFile.ts` | Diffable dialogue serialisation |
 | `src/editor/entityEditor.ts` | NPC and prop placement and inspector |
 | `src/world/prop.ts` | Prop billboards, and where their anchor lands |
+| `src/editor/tilesetEditor.ts` | Sheet import and the review screen |
+| `src/editor/sheetAnalysis.ts` | Coverage measurement and prop clustering |
+| `src/editor/tilesetFile.ts` | Diffable rider serialisation |
 
 **The helper works.** One dependency-free file the designer downloads from the
 published site. Creates `airhockey-content/`, writes only there, no clone and no
@@ -87,11 +90,21 @@ box. `parseDialogue` now validates these files on load as strictly as maps.
 inspector for every field, all undoing through the same MapDoc as the tiles.
 Props render now — `map.props` validated but drew nothing before.
 
-The dock has tabs (Map, Entities, Dialogue) — that is where events go.
+**Tileset import works.** A PNG goes in, gets written to the content folder,
+decoded in the browser, and classified; the review screen alongside it lets the
+designer cycle cell kinds, drag prop boxes, set anchors, and save — which is the
+only thing that sets `reviewed: true`. "Use this sheet for the map" repoints the
+open map, undoably, with a warning about what that does to its tile indices.
+
+On the shipped sheet the importer proposes exactly the failure decision 5
+predicted: one 9x9 prop swallowing everything. That is the review screen earning
+its place, not a bug to tune out.
+
+The dock has tabs (Map, Entities, Dialogue, Sheet) — that is where events go.
 
 ### Not started
 
-Tileset import, multiple maps, events. That is section 5.
+Multiple maps, events. That is section 5.
 
 ---
 
@@ -169,7 +182,7 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 ## 5. What to build next
 
 **Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → ~~5.4 dialogue~~ → ~~5.3 entities~~
-→ 5.2 import → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
+→ ~~5.2 import~~ → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
 designer something to react to a stage sooner. Events last, per decision 10.
 
 ### 5.0 Content routing — DONE
@@ -221,7 +234,7 @@ eyedropper / erase; a collision-grid overlay with its own tool; undo as a stroke
 Rebuilding a whole layer mesh per stroke is fine at 20×12. It is O(cells) and
 will want chunking before maps get large.
 
-### 5.2 Tileset import
+### 5.2 Tileset import — DONE
 
 Eric asked for this explicitly. The helper already permits `.png` writes.
 
@@ -323,5 +336,10 @@ Published at https://erictams.github.io/AirHockey/ — pushing to `main` deploys
   map's top-left corner, not like a bug. `placeEntities` exists for this.
 - Content routing (5.0) fixed the old "the game reads the site, not the helper"
   trap. A save now shows immediately.
+- **A texture served from the helper is cross-origin, and WebGL will not upload
+  an image that is not CORS-clean.** The refusal is silent — the texture samples
+  as transparent black and the world goes blank, with nothing in the console.
+  `Assets` sets `img.crossOrigin` for this. It only bites once a texture
+  actually comes from the content folder, i.e. after an import.
 - `npm run editor` and a downloaded helper behave identically, but the content
   folder follows the working directory.

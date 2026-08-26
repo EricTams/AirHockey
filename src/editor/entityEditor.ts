@@ -22,9 +22,17 @@ import { el } from './dom'
 const FACINGS: Facing[] = ['down', 'up', 'left', 'right']
 const DEFAULT_CHARACTER = 'data/characters/character-2.json'
 
+/**
+ * The player's start is edited like an entity even though it is a field rather
+ * than a list item. It is a thing standing on a tile that the designer moves,
+ * and giving it its own unrelated control would be the odd one out.
+ */
+export const PLAYER_START = '__player-start__'
+
 export type Selection =
   | { kind: 'npc'; id: string }
   | { kind: 'prop'; id: string }
+  | { kind: 'start' }
 
 export interface EntityHost {
   doc(): MapDoc
@@ -132,7 +140,7 @@ export class EntityEditor {
         return
       }
       const id = uniqueId(doc.map.props.map((p) => p.id), 'prop')
-      const touched = doc.editEntities('place prop', (map) => {
+      const touched = doc.editMap('place prop', (map) => {
         map.props.push({ id, prop: shape.id, x: cell.x, y: cell.y })
       })
       this.selected = { kind: 'prop', id }
@@ -144,7 +152,7 @@ export class EntityEditor {
     // Copy the character from an NPC already on the map: whatever the designer
     // is populating this world with is almost certainly what they want again.
     const character = doc.map.npcs.at(-1)?.character ?? DEFAULT_CHARACTER
-    const touched = doc.editEntities('place npc', (map) => {
+    const touched = doc.editMap('place npc', (map) => {
       map.npcs.push({ id, character, x: cell.x, y: cell.y, facing: 'down' })
     })
     this.selected = { kind: 'npc', id }
@@ -155,7 +163,11 @@ export class EntityEditor {
     const doc = this.host.doc()
     const sel = this.selected
     if (!sel || !doc.inBounds(cell.x, cell.y)) return
-    const touched = doc.editEntities('move', (map) => {
+    const touched = doc.editMap('move', (map) => {
+      if (sel.kind === 'start') {
+        map.playerStart = { ...map.playerStart, x: cell.x, y: cell.y }
+        return
+      }
       const entity = this.find(map, sel)
       if (entity) { entity.x = cell.x; entity.y = cell.y }
     })
@@ -166,7 +178,11 @@ export class EntityEditor {
     const doc = this.host.doc()
     const sel = this.selected
     if (!sel) return
-    const touched = doc.editEntities('delete', (map) => {
+    if (sel.kind === 'start') {
+      this.host.message('Every map needs a player start; move it instead.', 'err')
+      return
+    }
+    const touched = doc.editMap('delete', (map) => {
       if (sel.kind === 'npc') {
         const i = map.npcs.findIndex((n) => n.id === sel.id)
         if (i >= 0) map.npcs.splice(i, 1)
@@ -184,7 +200,7 @@ export class EntityEditor {
     const doc = this.host.doc()
     const sel = this.selected
     if (sel?.kind !== 'npc') return
-    const touched = doc.editEntities(label, (map) => {
+    const touched = doc.editMap(label, (map) => {
       const npc = map.npcs.find((n) => n.id === sel.id)
       if (npc) mutate(npc)
     })
@@ -195,7 +211,7 @@ export class EntityEditor {
     const doc = this.host.doc()
     const sel = this.selected
     if (sel?.kind !== 'prop') return
-    const touched = doc.editEntities(label, (map) => {
+    const touched = doc.editMap(label, (map) => {
       const prop = map.props.find((p) => p.id === sel.id)
       if (prop) mutate(prop)
     })
@@ -211,7 +227,8 @@ export class EntityEditor {
 
   // --- Lookups -------------------------------------------------------------
 
-  private find(map: GameMap, sel: Selection): MapNpc | MapProp | undefined {
+  private find(map: GameMap, sel: Selection): MapNpc | MapProp | GameMap['playerStart'] | undefined {
+    if (sel.kind === 'start') return map.playerStart
     return sel.kind === 'npc'
       ? map.npcs.find((n) => n.id === sel.id)
       : map.props.find((p) => p.id === sel.id)
@@ -227,7 +244,9 @@ export class EntityEditor {
     const npc = map.npcs.find((n) => n.x === cell.x && n.y === cell.y)
     if (npc) return { kind: 'npc', id: npc.id }
     const prop = map.props.find((p) => p.x === cell.x && p.y === cell.y)
-    return prop ? { kind: 'prop', id: prop.id } : undefined
+    if (prop) return { kind: 'prop', id: prop.id }
+    const start = map.playerStart
+    return start.x === cell.x && start.y === cell.y ? { kind: 'start' } : undefined
   }
 
   private paintMarks(): void {
@@ -235,6 +254,7 @@ export class EntityEditor {
     const marks: Cell[] = [
       ...map.npcs.map((n) => ({ x: n.x, y: n.y })),
       ...map.props.map((p) => ({ x: p.x, y: p.y })),
+      { x: map.playerStart.x, y: map.playerStart.y },
     ]
     const sel = this.selected ? this.position(map, this.selected) : undefined
     this.host.paintMarks(marks, sel)
@@ -286,18 +306,20 @@ export class EntityEditor {
     this.ui.addProp.title = hasProps
       ? 'Place a prop'
       : 'This tileset has no props yet — mark some out when importing a sheet'
-    this.ui.del.disabled = !this.selected
+    this.ui.del.disabled = !this.selected || this.selected.kind === 'start'
   }
 
   private renderList(): void {
     const map = this.host.doc().map
     const rows: HTMLElement[] = []
     const add = (sel: Selection, label: string, where: string) => {
-      const on = this.selected?.kind === sel.kind && this.selected.id === sel.id
+      const on = this.selected?.kind === sel.kind
+        && (sel.kind === 'start' || (this.selected as { id: string }).id === sel.id)
       const row = el('div', {
         class: 'ed-line', 'aria-selected': String(on), role: 'button',
       },
-        el('span', { class: 'ed-linekind' }, sel.kind === 'npc' ? 'NPC' : 'prop'),
+        el('span', { class: 'ed-linekind' },
+          sel.kind === 'npc' ? 'NPC' : sel.kind === 'prop' ? 'prop' : 'start'),
         el('span', { class: 'ed-linewho' }, label),
         el('span', { class: 'ed-linetext' }, where))
       row.onclick = () => {
@@ -308,11 +330,9 @@ export class EntityEditor {
       }
       rows.push(row)
     }
+    add({ kind: 'start' }, 'Player', `${map.playerStart.x},${map.playerStart.y}`)
     for (const n of map.npcs) add({ kind: 'npc', id: n.id }, n.id, `${n.x},${n.y}`)
     for (const p of map.props) add({ kind: 'prop', id: p.id }, p.id, `${p.x},${p.y}`)
-    if (rows.length === 0) {
-      rows.push(el('div', { class: 'ed-hint ed-sec' }, 'Nothing placed on this map yet.'))
-    }
     this.ui.list.replaceChildren(...rows)
     this.updateHint()
   }
@@ -325,11 +345,11 @@ export class EntityEditor {
     this.ui.empty.hidden = !!entity
     if (!sel || !entity) { this.ui.inspector.replaceChildren(); return }
 
-    this.ui.inspector.replaceChildren(
-      ...(sel.kind === 'npc'
-        ? this.npcFields(map, entity as MapNpc)
-        : this.propFields(entity as MapProp)),
-    )
+    this.ui.inspector.replaceChildren(...(
+      sel.kind === 'start' ? this.startFields(map)
+        : sel.kind === 'npc' ? this.npcFields(map, entity as MapNpc)
+          : this.propFields(entity as MapProp)
+    ))
   }
 
   private npcFields(map: GameMap, npc: MapNpc): HTMLElement[] {
@@ -384,6 +404,24 @@ export class EntityEditor {
 
     out.push(el('div', { class: 'ed-hint' }, `Standing on ${npc.x},${npc.y} — drag it on the map to move.`))
     return out
+  }
+
+  private startFields(map: GameMap): HTMLElement[] {
+    const facing = el('select', { class: 'ed-select' })
+    facing.replaceChildren(...FACINGS.map((f) => el('option', { value: f }, f)))
+    facing.value = map.playerStart.facing
+    facing.onchange = () => {
+      const touched = this.host.doc().editMap('start facing', (m) => {
+        m.playerStart = { ...m.playerStart, facing: facing.value as Facing }
+      })
+      this.after(touched, false)
+    }
+    return [
+      el('label', {}, 'Facing'),
+      facing,
+      el('div', { class: 'ed-hint' },
+        `The player begins on ${map.playerStart.x},${map.playerStart.y} — drag it on the map to move.`),
+    ]
   }
 
   private propFields(prop: MapProp): HTMLElement[] {
