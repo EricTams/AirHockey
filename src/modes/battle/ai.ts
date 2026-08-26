@@ -55,10 +55,10 @@ const FREQ_MAX = 0.09
 const MAX_TANGENTIAL = 0.8
 
 /**
- * How the paddle's speed budget is split. Pursuing the real target gets the
- * larger share; heat spends the rest weaving. The two are summed as velocities
- * and the total clamped to the paddle's top speed, so heat can redirect the
- * paddle but never outrun it.
+ * How the two urges are weighted when blending the direction to move in:
+ * pursuing the real target against weaving along the heat orbit. These mix the
+ * *heading* only — the result is scaled back up to full speed afterwards, so a
+ * hot AI is redirected, never slowed.
  */
 const BASE_SHARE = 0.6
 const HEAT_SHARE = 0.4
@@ -184,15 +184,15 @@ export class OpponentAI {
     const maxSpeed = sim.cfg.paddle.maxSpeed
     const me = sim.opponent
 
-    // Share going to the real target.
+    // Pursuit's share of the heading.
     let vx = 0
     let vy = 0
     const dx = target.x - me.x
     const dy = target.y - me.y
     const dist = Math.hypot(dx, dy)
     if (dist > 1e-6) {
-      vx = (dx / dist) * maxSpeed * BASE_SHARE
-      vy = (dy / dist) * maxSpeed * BASE_SHARE
+      vx = (dx / dist) * BASE_SHARE
+      vy = (dy / dist) * BASE_SHARE
     }
 
     if (this.heat > 0) {
@@ -226,25 +226,21 @@ export class OpponentAI {
       const oy = ratio * Math.cos(this.phaseY)
       const on = Math.hypot(ox, oy)
       if (on > 1e-6) {
-        const share = maxSpeed * HEAT_SHARE * Math.pow(heat, this.t.radiusCurve)
+        const share = HEAT_SHARE * Math.pow(heat, this.t.radiusCurve)
         vx += (ox / on) * share
         vy += (oy / on) * share
       }
     }
 
-    // Clamp the combined intent to what the paddle can actually do.
-    let speed = Math.hypot(vx, vy)
-    if (speed > maxSpeed) {
-      vx = (vx / speed) * maxSpeed
-      vy = (vy / speed) * maxSpeed
-      speed = maxSpeed
-    }
-    if (speed < 1e-6) return { ...target, speed: 0 }
+    // Scale the blended heading back up to full speed. The weights decide which
+    // way to go, not how hard to go: a hot AI is redirected, never slowed.
+    const len = Math.hypot(vx, vy)
+    if (len < 1e-6) return { ...target, speed: 0 }
 
     return {
-      x: me.x + (vx / speed) * LOOKAHEAD,
-      y: me.y + (vy / speed) * LOOKAHEAD,
-      speed,
+      x: me.x + (vx / len) * LOOKAHEAD,
+      y: me.y + (vy / len) * LOOKAHEAD,
+      speed: maxSpeed,
     }
   }
 }

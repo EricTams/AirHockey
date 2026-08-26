@@ -55,23 +55,38 @@ describe('heat', () => {
     expect(h.y).toBeCloseTo(want.y, 6)
   })
 
-  it('spends only its share of the speed budget while cold', () => {
-    // Pursuit takes 60%; the rest is reserved for heat to weave with, so heat
-    // can redirect the paddle without ever outrunning it.
+  it('moves at full speed whether cold or hot', () => {
+    // The 60/40 weights blend the heading only. Heat redirects the paddle; it
+    // must never slow it down, or a hot opponent is simply a worse one.
     const sim = new BattleSim(CFG)
     const ai = new OpponentAI(1)
     Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
-    expect(heading(ai, sim).speed).toBeCloseTo(CFG.paddle.maxSpeed * 0.6, 6)
+    expect(heading(ai, sim).speed).toBeCloseTo(CFG.paddle.maxSpeed, 6)
+
+    for (let i = 0; i < 40; i++) strike(ai, sim, 1.75, 2.1, 5)
+    expect(ai.heat).toBeGreaterThan(0.5)
+    for (let i = 0; i < 60; i++) {
+      expect(ai.update(sim).speed!).toBeCloseTo(CFG.paddle.maxSpeed, 6)
+    }
   })
 
-  it('never asks to exceed the paddle top speed, however hot', () => {
+  it('heat bends the heading away from straight pursuit', () => {
     const sim = new BattleSim(CFG)
-    const ai = new OpponentAI(1)
     Object.assign(sim.puck, { x: 1.0, y: 1.5, vx: 0, vy: 0 })
-    for (let i = 0; i < 40; i++) strike(ai, sim, 1.75, 2.1, 5)
+
+    const cold = new OpponentAI(1)
+    const want = toward(sim, baseTarget(sim))
+    const c = heading(cold, sim)
+    expect(c.x).toBeCloseTo(want.x, 6)
+
+    const hot = new OpponentAI(1)
+    for (let i = 0; i < 40; i++) strike(hot, sim, 1.75, 2.1, 5)
+    let maxBend = 0
     for (let i = 0; i < 60; i++) {
-      expect(ai.update(sim).speed!).toBeLessThanOrEqual(CFG.paddle.maxSpeed + 1e-9)
+      const h = heading(hot, sim)
+      maxBend = Math.max(maxBend, Math.hypot(h.x - want.x, h.y - want.y))
     }
+    expect(maxBend).toBeGreaterThan(0.2)
   })
 
   it('builds when strikes land in the same place in quick succession', () => {
