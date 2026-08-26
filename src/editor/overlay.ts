@@ -21,6 +21,7 @@ const ORDER = {
   collision: 200_000,
   grid: 200_100,
   border: 200_200,
+  marks: 200_250,
   cursor: 200_300,
 }
 
@@ -29,6 +30,7 @@ const Y = {
   collision: 0.010,
   grid: 0.020,
   border: 0.021,
+  marks: 0.025,
   cursor: 0.030,
 }
 
@@ -42,6 +44,7 @@ const COLOR = {
   grid: 0xdbe6f5,
   border: 0xe0b64a,
   collision: 0xd2453f,
+  marks: 0x59c9f0,
   cursor: 0xffffff,
 }
 
@@ -51,6 +54,7 @@ export class EditorOverlay {
   private grid?: THREE.LineSegments
   private border?: THREE.LineSegments
   private collision?: THREE.Mesh
+  private marks?: THREE.Mesh
   private cursor?: THREE.Mesh
 
   private gridVisible = true
@@ -128,6 +132,18 @@ export class EditorOverlay {
     this.group.add(this.collision)
   }
 
+  /**
+   * Show where the map's entities stand. A sprite is drawn a tile tall and
+   * anchored at its feet, so at a glance there is no telling which tile it
+   * actually occupies — which is the tile that matters for collision and for
+   * talking to it.
+   */
+  setMarks(cells: readonly { x: number; y: number }[]): void {
+    this.drop('marks')
+    this.marks = this.quads(cells, COLOR.marks, 0.3, Y.marks, ORDER.marks)
+    this.group.add(this.marks)
+  }
+
   /** Highlight the cells the current tool would touch. Empty clears it. */
   setCursor(cells: readonly { x: number; y: number }[]): void {
     this.drop('cursor')
@@ -173,7 +189,7 @@ export class EditorOverlay {
     return mesh
   }
 
-  private drop(which: 'grid' | 'border' | 'collision' | 'cursor'): void {
+  private drop(which: 'grid' | 'border' | 'collision' | 'marks' | 'cursor'): void {
     const old = this[which] as THREE.Mesh | THREE.LineSegments | undefined
     if (!old) return
     this.group.remove(old)
@@ -186,6 +202,7 @@ export class EditorOverlay {
     this.drop('grid')
     this.drop('border')
     this.drop('collision')
+    this.drop('marks')
     this.drop('cursor')
     this.group.removeFromParent()
   }

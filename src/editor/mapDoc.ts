@@ -1,4 +1,4 @@
-import { LAYER_NAMES, type GameMap, type LayerName } from '../world/map'
+import { LAYER_NAMES, type GameMap, type LayerName, type MapNpc, type MapProp } from '../world/map'
 import { EMPTY_TILE } from '../world/tileset'
 
 /**
@@ -29,8 +29,22 @@ export interface CellEdit {
   to: number
 }
 
-/** One undoable action. A union so entity edits can join later. */
-export type Edit = CellEdit
+/**
+ * The map's entities, snapshotted whole.
+ *
+ * Cells are recorded as before/after values because a stroke touches hundreds
+ * of them; entities are a handful of small objects, and their edits are
+ * structural — adding one, moving one, retargeting its dialogue — which a
+ * per-field diff would model badly for no saving.
+ */
+export interface EntityEdit {
+  kind: 'entities'
+  from: { npcs: MapNpc[]; props: MapProp[] }
+  to: { npcs: MapNpc[]; props: MapProp[] }
+}
+
+/** One undoable action. */
+export type Edit = CellEdit | EntityEdit
 
 export interface Stroke {
   label: string
@@ -41,9 +55,10 @@ export interface Stroke {
 export interface Touched {
   layers: LayerName[]
   collision: boolean
+  entities: boolean
 }
 
-const NOTHING: Touched = { layers: [], collision: false }
+const NOTHING: Touched = { layers: [], collision: false, entities: false }
 
 export class MapDoc {
   private undoStack: Stroke[] = []
@@ -109,6 +124,23 @@ export class MapDoc {
     return true
   }
 
+  /**
+   * Run a change to the map's NPCs and props as one undoable action.
+   *
+   * Self-contained rather than part of an open stroke: entity edits come from
+   * buttons and drags in the inspector, never from the middle of a brush
+   * stroke, and mixing the two would let an undo take back half of each.
+   */
+  editEntities(label: string, mutate: (map: GameMap) => void): Touched {
+    const from = snapshotEntities(this.map)
+    mutate(this.map)
+    const to = snapshotEntities(this.map)
+    if (JSON.stringify(from) === JSON.stringify(to)) return NOTHING
+    this.undoStack.push({ label, edits: [{ kind: 'entities', from, to }] })
+    this.redoStack = []
+    return { layers: [], collision: false, entities: true }
+  }
+
   /** Close the stroke and report what it touched. An empty stroke is dropped. */
   endStroke(): Touched {
     const stroke = this.open
@@ -140,7 +172,10 @@ export class MapDoc {
   redo(): Touched {
     const stroke = this.redoStack.pop()
     if (!stroke) return NOTHING
-    for (const edit of stroke.edits) this.cells(edit.target)[edit.index] = edit.to
+    for (const edit of stroke.edits) {
+      if (edit.kind === 'entities') restoreEntities(this.map, edit.to)
+      else this.cells(edit.target)[edit.index] = edit.to
+    }
     this.undoStack.push(stroke)
     return touchedBy(stroke)
   }
@@ -150,18 +185,34 @@ export class MapDoc {
 function revert(doc: MapDoc, stroke: Stroke): void {
   for (let i = stroke.edits.length - 1; i >= 0; i--) {
     const edit = stroke.edits[i]!
-    doc.cells(edit.target)[edit.index] = edit.from
+    if (edit.kind === 'entities') restoreEntities(doc.map, edit.from)
+    else doc.cells(edit.target)[edit.index] = edit.from
   }
+}
+
+function snapshotEntities(map: GameMap): { npcs: MapNpc[]; props: MapProp[] } {
+  return {
+    npcs: map.npcs.map((n) => ({ ...n })),
+    props: map.props.map((p) => ({ ...p })),
+  }
+}
+
+/** Replace in place: the scene and the document share these array objects. */
+function restoreEntities(map: GameMap, state: { npcs: MapNpc[]; props: MapProp[] }): void {
+  map.npcs.splice(0, map.npcs.length, ...state.npcs.map((n) => ({ ...n })))
+  map.props.splice(0, map.props.length, ...state.props.map((p) => ({ ...p })))
 }
 
 function touchedBy(stroke: Stroke): Touched {
   const layers = new Set<LayerName>()
   let collision = false
+  let entities = false
   for (const edit of stroke.edits) {
-    if (edit.target === COLLISION) collision = true
+    if (edit.kind === 'entities') entities = true
+    else if (edit.target === COLLISION) collision = true
     else layers.add(edit.target)
   }
-  return { layers: LAYER_NAMES.filter((n) => layers.has(n)), collision }
+  return { layers: LAYER_NAMES.filter((n) => layers.has(n)), collision, entities }
 }
 
 /** Merge two touched sets, for callers applying several actions at once. */
@@ -170,12 +221,13 @@ export function mergeTouched(a: Touched, b: Touched): Touched {
   return {
     layers: LAYER_NAMES.filter((n) => layers.has(n)),
     collision: a.collision || b.collision,
+    entities: a.entities || b.entities,
   }
 }
 
 /** True if a stroke changed nothing worth rebuilding for. */
 export function isNothing(t: Touched): boolean {
-  return t.layers.length === 0 && !t.collision
+  return t.layers.length === 0 && !t.collision && !t.entities
 }
 
 /**

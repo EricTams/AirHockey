@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { MapDoc, COLLISION, blankMap, isNothing } from '../src/editor/mapDoc'
+import type { MapNpc } from '../src/world/map'
 import { lineCells, rectCells, fillCells, toolCells } from '../src/editor/tools'
 import { parseMap } from '../src/world/map'
 import { makeTileset } from '../src/world/tileset'
@@ -16,7 +17,7 @@ describe('MapDoc editing', () => {
     d.beginStroke('brush')
     expect(d.set('ground', 1, 1, 7)).toBe(true)
     expect(d.get('ground', 1, 1)).toBe(7)
-    expect(d.endStroke()).toEqual({ layers: ['ground'], collision: false })
+    expect(d.endStroke()).toEqual({ layers: ['ground'], collision: false, entities: false })
   })
 
   it('drops writes that change nothing, so undo does not fill with no-ops', () => {
@@ -89,7 +90,7 @@ describe('MapDoc editing', () => {
     const d = doc()
     d.beginStroke('collision')
     d.set(COLLISION, 0, 0, 1)
-    expect(d.endStroke()).toEqual({ layers: [], collision: true })
+    expect(d.endStroke()).toEqual({ layers: [], collision: true, entities: false })
     expect(d.map.collision[0]).toBe(1)
   })
 
@@ -99,6 +100,58 @@ describe('MapDoc editing', () => {
     d.set('overhead', 0, 0, 7)
     d.set('ground', 0, 0, 7)
     expect(d.endStroke().layers).toEqual(['ground', 'overhead'])
+  })
+})
+
+describe('MapDoc entity edits', () => {
+  const npc = (id: string, x: number, y: number): MapNpc =>
+    ({ id, character: 'c.json', x, y, facing: 'down' })
+
+  it('records an entity change as one undoable action', () => {
+    const d = doc()
+    const touched = d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    expect(touched).toEqual({ layers: [], collision: false, entities: true })
+    expect(d.map.npcs).toHaveLength(1)
+    d.undo()
+    expect(d.map.npcs).toHaveLength(0)
+    d.redo()
+    expect(d.map.npcs).toHaveLength(1)
+  })
+
+  it('drops an edit that changed nothing', () => {
+    const d = doc()
+    expect(isNothing(d.editEntities('noop', () => {}))).toBe(true)
+    expect(d.canUndo).toBe(false)
+  })
+
+  it('restores entities in place, since the scene shares the arrays', () => {
+    // The overworld holds a reference to map.npcs; replacing the array would
+    // leave the scene rebuilding from the old one.
+    const d = doc()
+    const before = d.map.npcs
+    d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    d.undo()
+    expect(d.map.npcs).toBe(before)
+  })
+
+  it('interleaves with tile strokes in the order they happened', () => {
+    const d = doc()
+    d.beginStroke('paint'); d.set('ground', 0, 0, 7); d.endStroke()
+    d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+
+    d.undo()
+    expect(d.map.npcs).toHaveLength(0)
+    expect(d.get('ground', 0, 0)).toBe(7)   // the paint is still there
+    d.undo()
+    expect(d.get('ground', 0, 0)).toBe(14)
+  })
+
+  it('undoes a field change back to what it was', () => {
+    const d = doc()
+    d.editEntities('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
+    d.editEntities('facing', (m) => { m.npcs[0]!.facing = 'left' })
+    d.undo()
+    expect(d.map.npcs[0]!.facing).toBe('down')
   })
 })
 

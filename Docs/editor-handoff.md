@@ -51,6 +51,8 @@ loads `public/data/maps/overworld.json`.
 | `src/editor/dialogueEditor.ts` | Line list, fields, live preview |
 | `src/editor/dialogueDoc.ts` | The script being edited, snapshot undo |
 | `src/editor/dialogueFile.ts` | Diffable dialogue serialisation |
+| `src/editor/entityEditor.ts` | NPC and prop placement and inspector |
+| `src/world/prop.ts` | Prop billboards, and where their anchor lands |
 
 **The helper works.** One dependency-free file the designer downloads from the
 published site. Creates `airhockey-content/`, writes only there, no clone and no
@@ -81,11 +83,15 @@ speaker, portrait and text fields; live preview through the real
 `DialogueMode`, including a warning when a line wraps past the bottom of the
 box. `parseDialogue` now validates these files on load as strictly as maps.
 
-The dock has tabs (Map, Dialogue) — that is where entities and events go.
+**Entity placement works.** NPCs and props: place, drag to move, delete, and an
+inspector for every field, all undoing through the same MapDoc as the tiles.
+Props render now — `map.props` validated but drew nothing before.
+
+The dock has tabs (Map, Entities, Dialogue) — that is where events go.
 
 ### Not started
 
-Tileset import, entity placement, multiple maps, events. That is section 5.
+Tileset import, multiple maps, events. That is section 5.
 
 ---
 
@@ -162,7 +168,7 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 
 ## 5. What to build next
 
-**Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → ~~5.4 dialogue~~ → 5.3 entities
+**Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → ~~5.4 dialogue~~ → ~~5.3 entities~~
 → 5.2 import → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
 designer something to react to a stage sooner. Events last, per decision 10.
 
@@ -230,7 +236,7 @@ Eric asked for this explicitly. The helper already permits `.png` writes.
    designer cannot correct is worse than no proposal. Toggle cell kinds, drag
    prop rectangles, set anchors; saving marks `reviewed: true`.
 
-### 5.3 Entity placement
+### 5.3 Entity placement — DONE
 
 `map.npcs` exists and renders. `map.props` exists in the format and is validated
 but **is not rendered yet** — that is part of this stage. A prop is a billboard
@@ -311,8 +317,11 @@ Published at https://erictams.github.io/AirHockey/ — pushing to `main` deploys
   `new KeyboardEvent('keydown', { code: 'KeyW' })` instead.
 - **The helper is on 5178, not 5174** — 5174 is Vite's fallback when 5173 is
   taken, and they fight over it.
-- **The running game loads content from the site, not the helper.** After a save
-  the world will not change until the editor rebuilds the scene (see 5.1) or the
-  page is reloaded. Expect to be confused by this once.
+- **Sprites are positioned in `update()`, which does not run while paused.**
+  Anything that builds a sprite outside a tick has to place it too, or it sits
+  at the world origin — which for four sprites looks like one smudge in the
+  map's top-left corner, not like a bug. `placeEntities` exists for this.
+- Content routing (5.0) fixed the old "the game reads the site, not the helper"
+  trap. A save now shows immediately.
 - `npm run editor` and a downloaded helper behave identically, but the content
   folder follows the working directory.

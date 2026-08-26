@@ -6,8 +6,9 @@ import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
 import { buildTileLayer } from '../world/tileLayer'
-import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type LayerName, type MapNpc } from '../world/map'
-import type { Tileset } from '../world/tileset'
+import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type LayerName, type MapNpc, type MapProp } from '../world/map'
+import { propById, type PropDef, type Tileset } from '../world/tileset'
+import { buildProp, placeProp } from '../world/prop'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
 import { parseDialogue, type DialogueScript } from './dialogue'
@@ -25,6 +26,12 @@ const PLAYER_CHARACTER = 'data/characters/character-1.json'
 
 const DIRS: Record<Facing, [number, number]> = {
   up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+}
+
+interface PropSlot {
+  def: MapProp
+  shape: PropDef
+  mesh: THREE.Mesh
 }
 
 interface NpcSlot {
@@ -50,6 +57,7 @@ export class OverworldMode implements Mode {
   private sheet!: THREE.Texture
   private layers = new Map<LayerName, THREE.Mesh>()
   private npcs: NpcSlot[] = []
+  private props: PropSlot[] = []
 
   private tx = 0
   private ty = 0
@@ -118,10 +126,28 @@ export class OverworldMode implements Mode {
 
     const def = await fetchJson<CharacterDef>(PLAYER_CHARACTER)
     this.player = await CharacterSprite.load(def, this.assets)
+    this.player.setFrame(this.facing, this.player.def.idleFrame)
     this.sprites.add(this.player.mesh)
 
+    await this.rebuildEntities()
+
+    // Nothing calls lookAt() while the loop is paused, so leave the camera on
+    // the player rather than wherever the previous map left it.
+    this.proj.lookAt(this.tx, this.ty)
+  }
+
+  /**
+   * Rebuild the NPCs and props from the map's arrays, which the editor edits in
+   * place. Everything is loaded again rather than diffed: an NPC's sprite,
+   * dialogue and battle all hang off fields the editor can change, and a
+   * handful of small fetches is not worth the reconciliation.
+   */
+  async rebuildEntities(): Promise<void> {
+    this.disposeEntities()
+    const map = this.map
+
     this.npcs = map.npcs.map((n) => ({ def: n, tile: [n.x, n.y], facing: n.facing }))
-    await Promise.all(this.npcs.map(async (slot) => {
+    const npcs = Promise.all(this.npcs.map(async (slot) => {
       const npcDef = await fetchJson<CharacterDef>(slot.def.character)
       slot.sprite = await CharacterSprite.load(npcDef, this.assets)
       if (slot.def.tint !== undefined) slot.sprite.setTint(slot.def.tint)
@@ -133,9 +159,61 @@ export class OverworldMode implements Mode {
       if (slot.def.battle) slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
     }))
 
-    // Nothing calls lookAt() while the loop is paused, so leave the camera on
-    // the player rather than wherever the previous map left it.
-    this.proj.lookAt(this.tx, this.ty)
+    // Props share the tileset sheet, which applyMap has already loaded.
+    for (const p of map.props) {
+      const shape = propById(this.tileset, p.prop)
+      if (!shape) continue   // parseMap rejects this; belt and braces
+      const mesh = buildProp(this.sheet, this.tileset, shape)
+      placeProp(this.proj, mesh, shape, p.x, p.y)
+      this.sprites.add(mesh)
+      this.props.push({ def: p, shape, mesh })
+    }
+
+    await npcs
+    this.placeEntities()
+  }
+
+  /**
+   * Put every sprite and prop on its tile.
+   *
+   * Split out of `update` because `update` is the only thing that used to do
+   * it, and the editor pauses the loop — which left every sprite a rebuild
+   * created sitting at the world origin, stacked on top of each other in the
+   * map's top-left corner.
+   *
+   * The player's position is passed in because it interpolates mid-step;
+   * everything else stands still on its own tile.
+   */
+  private placeEntities(px = this.tx, py = this.ty): void {
+    if (this.player) {
+      this.proj.placeBillboard(this.player.mesh, px, py)
+      this.player.mesh.renderOrder = this.proj.sortKey(py)
+    }
+    for (const npc of this.npcs) {
+      if (!npc.sprite) continue
+      this.proj.placeBillboard(npc.sprite.mesh, npc.tile[0], npc.tile[1])
+      npc.sprite.mesh.renderOrder = this.proj.sortKey(npc.tile[1])
+    }
+    for (const prop of this.props) {
+      placeProp(this.proj, prop.mesh, prop.shape, prop.def.x, prop.def.y)
+    }
+  }
+
+  private disposeEntities(): void {
+    this.player?.mesh.removeFromParent()
+    for (const npc of this.npcs) {
+      npc.sprite?.mesh.removeFromParent()
+      npc.sprite?.dispose()
+    }
+    for (const prop of this.props) {
+      prop.mesh.removeFromParent()
+      prop.mesh.geometry.dispose()
+      ;(prop.mesh.material as THREE.Material).dispose()
+    }
+    this.npcs = []
+    this.props = []
+    // The player lives in the same group and must go back in after the clear.
+    if (this.player) this.sprites.add(this.player.mesh)
   }
 
   /**
@@ -169,11 +247,10 @@ export class OverworldMode implements Mode {
     for (const name of [...this.layers.keys()]) this.dropLayer(name)
     // Textures belong to Assets and are shared; CharacterSprite.dispose drops
     // only the geometry and material it owns.
+    this.disposeEntities()
     this.player?.dispose()
-    for (const npc of this.npcs) npc.sprite?.dispose()
     this.sprites.clear()
     this.player = undefined
-    this.npcs = []
   }
 
   /** The map currently in the scene. The editor edits this object in place. */
@@ -275,13 +352,7 @@ export class OverworldMode implements Mode {
       : this.player.def.idleFrame
     this.player.setFrame(this.facing, frame)
 
-    this.proj.placeBillboard(this.player.mesh, x, y)
-    this.player.mesh.renderOrder = this.proj.sortKey(y)
-    for (const npc of this.npcs) {
-      if (!npc.sprite) continue
-      this.proj.placeBillboard(npc.sprite.mesh, npc.tile[0], npc.tile[1])
-      npc.sprite.mesh.renderOrder = this.proj.sortKey(npc.tile[1])
-    }
+    this.placeEntities(x, y)
     this.proj.lookAt(x, y)
     this.backdrop.update(x, y, this.proj.pitchDeg)
   }

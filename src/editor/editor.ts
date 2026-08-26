@@ -14,6 +14,7 @@ import { bundleChanges, saveBundle } from './handoff'
 import { EDITOR_CSS, DOCK_PX } from './editorCss'
 import { el, checkbox } from './dom'
 import { DialogueEditor } from './dialogueEditor'
+import { EntityEditor } from './entityEditor'
 import type { ModeManager } from '../core/mode'
 import type { DialogueMode } from '../modes/dialogue'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
@@ -54,6 +55,7 @@ export interface EditorHost {
 /** The panels the dock can show. Entities and events join this later. */
 const TABS = [
   { id: 'map', label: 'Map' },
+  { id: 'entities', label: 'Entities' },
   { id: 'dialogue', label: 'Dialogue' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
@@ -77,6 +79,7 @@ export class Editor {
 
   private tab: Tab = 'map'
   private dialogueEditor?: DialogueEditor
+  private entityEditor?: EntityEditor
   private target: EditTarget = 'ground'
   private tool: Tool = 'brush'
   private erasing = false
@@ -104,6 +107,7 @@ export class Editor {
     dot: HTMLElement
     tabs: Map<Tab, HTMLButtonElement>
     mapPane: HTMLElement
+    docFoot: HTMLElement
     gridCheck: HTMLInputElement
     collisionCheck: HTMLInputElement
     cellText: HTMLElement
@@ -163,6 +167,21 @@ export class Editor {
         : firstPaintable(tileset.cells.length, (i) => isPaintable(tileset, i)),
     )
 
+    this.entityEditor = new EntityEditor({
+      doc: () => this.doc!,
+      tileset: () => this.host.overworld.currentTileset,
+      server,
+      applyTouched: (touched) => {
+        if (!isNothing(touched)) this.refresh(touched)
+        this.syncButtons()
+      },
+      paintMarks: (marks, selected) => {
+        this.overlay?.setMarks(marks)
+        this.overlay?.setCursor(selected ? [selected] : [])
+      },
+      message: (text, tone) => this.message(text, tone),
+    })
+
     this.dialogueEditor = new DialogueEditor({
       server,
       modes: this.host.modes,
@@ -208,9 +227,11 @@ export class Editor {
 
     // Whatever pane was showing, the game goes back to rendering the world.
     this.dialogueEditor?.deactivate()
+    this.entityEditor?.deactivate()
     this.host.modes.switchNow('overworld')
     this.host.overworld.projection.setZoom(1)
     this.dialogueEditor = undefined
+    this.entityEditor = undefined
     this.tab = 'map'
     this.doc = undefined
     this.overlay = undefined
@@ -265,7 +286,7 @@ export class Editor {
   // --- Pointer -------------------------------------------------------------
 
   private onPointerDown(e: PointerEvent): void {
-    if (!this.doc || this.tab !== 'map') return
+    if (!this.doc || !this.paintsOnCanvas) return
     // Middle button, or space held, pans. Anything else paints.
     if (e.button === 1 || e.button === 2 || this.spaceHeld) {
       this.pan = { clientX: e.clientX, clientY: e.clientY, camX: this.camX, camY: this.camY }
@@ -276,6 +297,8 @@ export class Editor {
 
     const cell = this.cellAt(e.clientX, e.clientY)
     if (!cell) return
+
+    if (this.tab === 'entities') { this.entityEditor?.pointerDown(cell); return }
 
     if (this.tool === 'eyedropper') { this.eyedrop(cell); return }
 
@@ -298,7 +321,7 @@ export class Editor {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.doc || this.tab !== 'map') return
+    if (!this.doc || !this.paintsOnCanvas) return
 
     if (this.pan) {
       // Pan in world units so the drag tracks the cursor at any zoom.
@@ -313,6 +336,8 @@ export class Editor {
     this.hover = cell
     this.updateStatus()
     if (!cell) return
+
+    if (this.tab === 'entities') { this.entityEditor?.pointerDrag(cell); return }
 
     const p = this.painting
     if (!p) { this.overlay?.setCursor([cell]); return }
@@ -331,6 +356,7 @@ export class Editor {
 
   private onPointerUp(e: PointerEvent): void {
     if (this.pan) { this.pan = undefined; return }
+    if (this.tab === 'entities') { this.entityEditor?.pointerUp(); return }
     if (!this.painting || e.button !== 0) return
     const p = this.painting
     if (p.preview) this.applyCells(rectCells(p.from, p.last))
@@ -344,7 +370,7 @@ export class Editor {
   }
 
   private onWheel(e: WheelEvent): void {
-    if (!this.doc || this.tab !== 'map') return
+    if (!this.doc || !this.paintsOnCanvas) return
     e.preventDefault()
     // Zoom about the cursor: keep whatever tile is under it under it, or
     // zooming in on a corner of the map walks away from what you were looking at.
@@ -358,6 +384,11 @@ export class Editor {
       this.camY += before.z - after.z
       this.applyCamera()
     }
+  }
+
+  /** Tabs that act on the world: they pick, pan and zoom against the canvas. */
+  private get paintsOnCanvas(): boolean {
+    return this.tab === 'map' || this.tab === 'entities'
   }
 
   /** World tiles covered by one client pixel, for panning. */
@@ -379,7 +410,13 @@ export class Editor {
     const value = this.paintValue
     let changed = false
     for (const c of cells) changed = doc.set(this.target, c.x, c.y, value) || changed
-    if (changed) this.refresh({ layers: layersOf(this.target), collision: this.target === COLLISION })
+    if (changed) {
+      this.refresh({
+        layers: layersOf(this.target),
+        collision: this.target === COLLISION,
+        entities: false,
+      })
+    }
   }
 
   private finishStroke(): void {
@@ -399,6 +436,13 @@ export class Editor {
   private refresh(touched: Touched): void {
     if (touched.layers.length > 0) this.host.overworld.rebuildLayers(touched.layers)
     if (touched.collision) this.overlay?.setCollision(this.doc!.map)
+    if (touched.entities) {
+      // Reloads character definitions and dialogue, so it cannot be awaited
+      // from a pointer handler. Failures land in the status bar.
+      void this.host.overworld.rebuildEntities()
+        .then(() => this.entityEditor?.refresh())
+        .catch((err: Error) => this.message(`Could not rebuild: ${err.message}`, 'err'))
+    }
   }
 
   private eyedrop(cell: Cell): void {
@@ -509,14 +553,16 @@ export class Editor {
     if (mod && e.code === 'KeyS') { e.preventDefault(); void this.saveActive(); return }
     // Undo belongs to the pane that is showing. The dialogue pane's own fields
     // handle text undo natively, and stealing the shortcut would break that.
-    if (mod && this.tab === 'map' && (e.code === 'KeyZ' || e.code === 'KeyY')) {
+    if (mod && this.tab !== 'dialogue' && (e.code === 'KeyZ' || e.code === 'KeyY')) {
       e.preventDefault()
       if (e.code === 'KeyY' || e.shiftKey) this.redo(); else this.undo()
       return
     }
     if (mod) return
-    // Everything below paints, and only the map pane paints.
-    if (this.tab !== 'map') return
+    if (!this.paintsOnCanvas) return
+    // Camera keys work wherever the world is on screen; the tool and layer
+    // shortcuts belong to the map pane.
+    if (this.tab !== 'map' && !CAMERA_KEYS.has(e.code)) return
 
     switch (e.code) {
       case 'Space': this.spaceHeld = true; e.preventDefault(); break
@@ -567,18 +613,25 @@ export class Editor {
     if (dom) {
       for (const [id, b] of dom.tabs) b.setAttribute('aria-pressed', String(id === tab))
       dom.mapPane.hidden = tab !== 'map'
+      // Undo and Save act on the map document, which both of these panes edit.
+      dom.docFoot.hidden = tab === 'dialogue'
     }
     if (this.dialogueEditor) this.dialogueEditor.root.hidden = tab !== 'dialogue'
+    if (this.entityEditor) this.entityEditor.root.hidden = tab !== 'entities'
 
-    if (tab === 'map') {
-      this.dialogueEditor?.deactivate()
+    if (tab !== 'dialogue') this.dialogueEditor?.deactivate()
+    if (tab !== 'entities') this.entityEditor?.deactivate()
+
+    if (tab === 'dialogue') {
+      // The grid over a world that is only a backdrop for the box is noise.
+      if (this.overlay) this.overlay.group.visible = false
+      await this.dialogueEditor?.activate()
+    } else {
       this.host.modes.switchNow('overworld')
       if (this.overlay) this.overlay.group.visible = true
       this.applyCamera()
-    } else {
-      // The grid over a world that is only a backdrop for the box is noise.
-      if (this.overlay) this.overlay.group.visible = false
-      if (tab === 'dialogue') await this.dialogueEditor?.activate()
+      if (tab === 'map') this.overlay?.setMarks([])
+      if (tab === 'entities') this.entityEditor?.activate()
     }
     this.syncButtons()
   }
@@ -665,7 +718,7 @@ export class Editor {
     redo.onclick = () => { redo.blur(); this.redo() }
     const save = el('button', { class: 'ed-save', type: 'button' }, 'Save')
     save.onclick = () => { save.blur(); void this.save() }
-    mapPane.append(el('div', { class: 'ed-foot2' }, undo, redo, save))
+    const docFoot = el('div', { class: 'ed-foot2' }, undo, redo, save)
 
     const download = el('button', { class: 'ed-second', type: 'button' },
       'Download my changes')
@@ -681,14 +734,15 @@ export class Editor {
       el('span', {}, el('b', {}, 'zoom '), zoomText),
       message)
 
-    dock.append(mapPane, this.dialogueEditor!.root)
+    dock.append(mapPane, this.entityEditor!.root, this.dialogueEditor!.root, docFoot)
     // The download packs the whole content folder, so it belongs to the session
     // rather than to whichever pane happens to be showing.
     dock.append(el('div', { class: 'ed-foot3' }, download))
 
     this.root.append(dock, bar)
     this.dom = {
-      style, dock, bar, tabs, mapPane, tools, targets, erase, save, undo, redo, download, dot,
+      style, dock, bar, tabs, mapPane, docFoot,
+      tools, targets, erase, save, undo, redo, download, dot,
       gridCheck: grid.input, collisionCheck: coll.input,
       cellText, tileText, zoomText, message,
     }
@@ -747,6 +801,12 @@ export class Editor {
     }, MESSAGE_MS)
   }
 }
+
+/** Keys that only move the view, so they work on any world-facing pane. */
+const CAMERA_KEYS = new Set([
+  'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+])
 
 /** Tiles the arrow keys move the camera per press. */
 const NUDGE_TILES = 2

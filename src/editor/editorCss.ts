@@ -42,11 +42,18 @@ export const EDITOR_CSS = `
    as a rendering fault. The pane scrolls instead. */
 .ed-lines { flex: none; max-height: 190px; overflow: auto;
   background: #0e131c; border-bottom: 1px solid #1c2431; }
-.ed-line { display: grid; grid-template-columns: 20px 62px 1fr; gap: 6px; align-items: baseline;
+.ed-line { display: grid; grid-template-columns: 30px 76px 1fr; gap: 6px; align-items: baseline;
   padding: 5px 10px; cursor: pointer; border-bottom: 1px solid #151d29; font-size: 11px; }
 .ed-line:hover { background: #161e2b; }
 .ed-line[aria-selected="true"] { background: #22314a; }
 .ed-lineno { color: #5d6d81; text-align: right; font-variant-numeric: tabular-nums; }
+.ed-linekind { color: #6d8098; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .06em; }
+.ed-hint { color: #6d7d92; font-size: 11px; line-height: 1.5; }
+.ed-hint[hidden] { display: none; }
+.ed-color { flex: 1; height: 26px; padding: 0; background: #0c1119;
+  border: 1px solid #2b3545; border-radius: 5px; cursor: pointer; }
+.ed-fields > div { margin-bottom: 2px; }
 .ed-linewho { color: #ffd76b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ed-linetext { color: #9fb0c5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ed-line[aria-selected="true"] .ed-linetext { color: #dce7f5; }
@@ -75,6 +82,7 @@ export const EDITOR_CSS = `
   border: 1px solid #222c3a; }
 /* Sticky, because a long warning or a tall field list can push the pane past
    the dock's height and Save must not scroll away. */
+.ed-foot2[hidden] { display: none; }
 .ed-foot2 { flex: none; position: sticky; bottom: 0; padding: 10px 12px; display: flex;
   gap: 6px; align-items: center; border-top: 1px solid #212a38; background: #131924; }
 .ed-save { flex: 1; padding: 7px 10px; border-radius: 6px; border: 1px solid #35608f;
