@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { BattleSim, opponentTarget, type BattleConfig } from '../src/modes/battle/physics'
+import { BattleSim, type BattleConfig } from '../src/modes/battle/physics'
+import { opponentTarget } from '../src/modes/battle/ai'
 
 const CFG: BattleConfig = {
   id: 'test',

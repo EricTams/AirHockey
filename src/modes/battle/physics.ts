@@ -91,6 +91,12 @@ export class BattleSim {
   wingDislodged = false
   /** Set for one step when the puck just used a pipe, for the scene to react to. */
   lastPipeUsed?: string
+  /**
+   * Set for the step in which the opponent's paddle struck the puck: where the
+   * contact happened and where the puck went. The AI watches this to notice
+   * when it is repeating itself.
+   */
+  lastOpponentHit?: { x: number; y: number; vx: number; vy: number }
 
   private pipeCooldown = 0
   private wingCooldown = 0
@@ -273,6 +279,7 @@ export class BattleSim {
     const wing = this.wing
     let result: StepResult = 'none'
     this.lastPipeUsed = undefined
+    this.lastOpponentHit = undefined
 
     for (let i = 0; i < SUBSTEPS; i++) {
       this.movePaddle(this.player, playerTarget, sub, true)
@@ -295,7 +302,14 @@ export class BattleSim {
       }
 
       this.collideCircle(this.player.x, this.player.y, this.cfg.paddle.radius, this.player.vx, this.player.vy)
-      this.collideCircle(this.opponent.x, this.opponent.y, this.cfg.paddle.radius, this.opponent.vx, this.opponent.vy)
+      if (this.collideCircle(
+        this.opponent.x, this.opponent.y, this.cfg.paddle.radius,
+        this.opponent.vx, this.opponent.vy,
+      )) {
+        this.lastOpponentHit = {
+          x: this.puck.x, y: this.puck.y, vx: this.puck.vx, vy: this.puck.vy,
+        }
+      }
       for (const b of this.blocks) this.collideBlock(b)
 
       if (wing && !this.wingDislodged) {
@@ -323,34 +337,4 @@ export class BattleSim {
     this.puck.vy *= this.cfg.puck.friction
     return result
   }
-}
-
-/**
- * Doc §8.4, thin-slice form. Two states:
- *
- *   Attack  the puck is on the opponent's side and within reach, so drive at a
- *           point just past it toward the player's goal.
- *   Defend  otherwise, hold a home line and track the puck's x.
- *
- * Deterministic rather than probability-gated, so it is testable and cannot
- * deadlock. An earlier version only ever held the home line, which meant a puck
- * resting at centre was never contested and the stuck-puck rule re-faceoffed
- * forever.
- */
-export function opponentTarget(sim: BattleSim): Vec {
-  const { length } = sim.cfg.table
-  const opp = sim.cfg.opponent
-  const home = (length / 2) * (opp.roamDepth ?? 0.45)
-
-  // An inert opponent stands well aside rather than defending at all.
-  if (opp.ai === 'inert') return { x: -sim.cfg.table.width * 0.36, y: length * 0.42 }
-
-  const reach = length * (0.25 + (opp.aggression ?? 0.5) * 0.35)
-  // The paddle is clamped out of the player's half anyway, so targeting just
-  // past a centre puck presses right up to the line and connects.
-  if (sim.puck.y > -sim.cfg.puck.radius && sim.puck.y < reach) {
-    const behind = (sim.cfg.paddle.radius + sim.cfg.puck.radius) * 0.9
-    return { x: sim.puck.x, y: sim.puck.y - behind }
-  }
-  return { x: sim.puck.x * 0.6, y: home }
 }

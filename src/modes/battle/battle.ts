@@ -8,7 +8,8 @@ import { getFont } from '../../ui/bitmapFont'
 import { makeTextMesh, textWidth } from '../../ui/text'
 import { screenLine, screenPoly } from '../../core/screenScene'
 import { VIRTUAL_W, VIRTUAL_H, TICK_HZ } from '../../core/config'
-import { BattleSim, opponentTarget, type BattleConfig } from './physics'
+import { BattleSim, type BattleConfig } from './physics'
+import { OpponentAI } from './ai'
 import { makePlaceholderTexture } from '../../world/placeholder'
 import { findMissing } from '../../world/missingArt'
 import { loadAseprite } from '../../world/aseprite'
@@ -57,6 +58,7 @@ export class BattleMode implements Mode {
   private screen = new ScreenLayer()
 
   private sim!: BattleSim
+  private ai = new OpponentAI()
   private phase: Phase = 'countdown'
   private timer = 0
   private stuck = 0
@@ -93,6 +95,7 @@ export class BattleMode implements Mode {
     if (!p) throw new Error('battle requires a config payload')
     this.returnTo = p.returnTo
     this.sim = new BattleSim(p.config)
+    this.ai.reset()
     this.score = [0, 0]
     // The match waits on the player: they grab their paddle to begin.
     this.phase = 'ready'
@@ -424,7 +427,7 @@ export class BattleMode implements Mode {
       }
       if (--this.timer <= 0) this.phase = 'play'
     } else if (this.phase === 'play') {
-      const result = this.sim.step(dt, this.playerTarget(), opponentTarget(this.sim))
+      const result = this.sim.step(dt, this.playerTarget(), this.ai.update(this.sim))
       if (result === 'dislodged') {
         // Knocking the wing loose is the whole win condition in this mode.
         if (this.wingMesh) this.wingMesh.visible = false
@@ -441,12 +444,13 @@ export class BattleMode implements Mode {
         this.stuck = 0
       } else {
         this.stuck = this.sim.speed < STUCK_SPEED ? this.stuck + 1 : 0
-        if (this.stuck >= STUCK_TICKS) { this.sim.faceoff(0); this.stuck = 0 }
+        if (this.stuck >= STUCK_TICKS) { this.sim.faceoff(0); this.ai.reset(); this.stuck = 0 }
       }
     } else if (this.phase === 'scored') {
       if (--this.timer <= 0) {
         // Nudge the faceoff toward whoever just conceded.
         this.sim.faceoff(this.score[0] > this.score[1] ? 0.5 : -0.5)
+        this.ai.reset()
         // Every faceoff waits on the player, not just the first: play should
         // never resume while they are still reacting to the last goal.
         this.phase = 'ready'
