@@ -8,7 +8,7 @@ import { GalleryMode } from './modes/gallery'
 import { OverworldMode } from './modes/overworld'
 import { DialogueMode } from './modes/dialogue'
 import { BattleMode } from './modes/battle/battle'
-import { VIRTUAL_W, VIRTUAL_H } from './core/config'
+import { VIRTUAL_W, VIRTUAL_H, TICK_DT } from './core/config'
 import { fetchJson } from './core/paths'
 import type { BattleConfig } from './modes/battle/physics'
 
@@ -36,20 +36,27 @@ modes.register(battle)
 modes.register(new GalleryMode(gfx))
 modes.switchTo('overworld')
 
+/**
+ * One logic tick. Named so the dev hook can drive it directly: browsers freeze
+ * requestAnimationFrame in a background tab, which makes the game unobservable
+ * from automation. Stepping it by hand runs the sim regardless.
+ */
+const tick = (dt: number) => {
+  if (input.pressed('debugOverlay')) debug.toggle()
+  if (input.pressed('debugMode')) {
+    const order = modes.names
+    const next = order[(order.indexOf(modes.activeName) + 1) % order.length]!
+    modes.switchTo(next)
+  }
+  // Scrub the camera pitch live to evaluate the 2.5D look against real art.
+  if (input.pressed('pitchDown')) overworld.setPitch(overworld.pitch - 5)
+  if (input.pressed('pitchUp')) overworld.setPitch(overworld.pitch + 5)
+  modes.update(dt)
+  input.endTick()
+}
+
 const loop = new Loop(
-  (dt) => {
-    if (input.pressed('debugOverlay')) debug.toggle()
-    if (input.pressed('debugMode')) {
-      const order = modes.names
-      const next = order[(order.indexOf(modes.activeName) + 1) % order.length]!
-      modes.switchTo(next)
-    }
-    // Scrub the camera pitch live to evaluate the 2.5D look against real art.
-    if (input.pressed('pitchDown')) overworld.setPitch(overworld.pitch - 5)
-    if (input.pressed('pitchUp')) overworld.setPitch(overworld.pitch + 5)
-    modes.update(dt)
-    input.endTick()
-  },
+  tick,
   () => {
     modes.render()
     gfx.present()
@@ -83,6 +90,10 @@ if (import.meta.env.DEV) {
       const config = await fetchJson<BattleConfig>(`data/battles/${id}.json`)
       modes.switchTo('battle', { config, returnTo: 'overworld' })
       return id
+    },
+    /** Advance the simulation by n logic ticks without waiting on the display. */
+    tick(n = 1) {
+      for (let i = 0; i < n; i++) tick(TICK_DT)
     },
   }
 }

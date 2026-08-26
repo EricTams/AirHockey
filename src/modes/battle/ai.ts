@@ -31,12 +31,14 @@ const SAME_PLACE = 0.45
  */
 const SAME_BEAT_TICKS = 50
 /**
- * Heat added per repeat. Deliberately small — around seven rapid repeats in the
- * same spot to reach full heat — so ordinary exchanges never scatter the AI.
+ * Heat added per repeat. Must clearly outpace what cools off between strikes:
+ * a grind lands contact every 20-40 ticks, so at 0.15 gain against 0.12 decay
+ * heat crept to only ~0.3 even under deliberate provocation, which is barely
+ * any scatter at all. This nets roughly +0.17 per strike during a real grind.
  */
-const HEAT_PER_REPEAT = 0.15
-/** Heat shed per tick, so full heat cools in about four seconds of clean play. */
-const COOL_PER_TICK = 0.004
+const HEAT_PER_REPEAT = 0.25
+/** Heat shed per tick: full heat cools over about seven seconds of clean play. */
+const COOL_PER_TICK = 0.0025
 /** How far aim scatters, in world units, at full heat. */
 const MAX_SCATTER = 0.85
 /** A puck this close to a side wall is treated as cornered. */
@@ -101,7 +103,10 @@ export class OpponentAI {
   /** Advance one tick and return where the opponent's paddle should go. */
   update(sim: BattleSim): Vec {
     this.tick++
-    this.heat = Math.max(0, this.heat - this.t.coolPerTick)
+    // Snap to exactly zero: repeated subtraction leaves a float residue that
+    // would otherwise keep scattering aim, faintly, forever.
+    const cooled = this.heat - this.t.coolPerTick
+    this.heat = cooled < 1e-6 ? 0 : cooled
 
     const hit = sim.lastOpponentHit
     if (hit) {

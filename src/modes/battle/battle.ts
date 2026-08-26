@@ -104,6 +104,9 @@ export class BattleMode implements Mode {
     this.timer = READY_LOCK_TICKS
     this.stuck = 0
     this.started = false
+    // Debug flags must not leak between battles, or a harness run inherits
+    // whatever the last one left switched on.
+    this.autoPlay = false
     void this.build(p)
   }
 
@@ -435,6 +438,14 @@ export class BattleMode implements Mode {
     this.debugKeys()
 
     if (this.phase === 'ready') {
+      // The bot harness serves itself, so a long observation run is not halted
+      // by the click gate after every goal.
+      if (this.autoPlay) {
+        this.phase = 'countdown'
+        this.timer = COUNTDOWN_TICKS
+        this.started = true
+        return
+      }
       if (this.timer > 0) this.timer--
       // Play only ever begins by grabbing your own paddle with the pointer.
       // There is deliberately no key for this: the match must not start until
