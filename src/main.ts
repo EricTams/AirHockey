@@ -87,7 +87,7 @@ loop.start()
  * editor's back.
  */
 const editor = mountEditorUi({
-  onEnter(server) {
+  async onEnter(server) {
     // Editing acts on the overworld, so settle any pending mode change with a
     // single tick before the sim stops.
     if (modes.activeName !== 'overworld') {
@@ -96,10 +96,25 @@ const editor = mountEditorUi({
     }
     loop.setPaused(true)
     input.reset()
-    console.log('[editor] editing against', server.origin, '- game paused')
+
+    // Point content reads at the designer's own folder, then rebuild the world
+    // from it. Anything they had already edited was loaded from the site during
+    // boot, so those textures are stale and have to be dropped by hand.
+    await server.install()
+    const edited = server.editedPaths ?? new Set<string>()
+    for (const path of edited) assets.invalidate(path)
+    await overworld.reload()
+
+    console.log('[editor] editing against', server.origin,
+      `- game paused, ${edited.size} edited file(s)`)
   },
-  onExit() {
+  async onExit(server) {
     input.reset()   // drop anything held while the editor had focus
+    const edited = server.editedPaths ?? new Set<string>()
+    server.uninstall()
+    // Same problem in reverse: the scene is holding the designer's content.
+    for (const path of edited) assets.invalidate(path)
+    await overworld.reload()
     loop.setPaused(false)
     console.log('[editor] resumed')
   },

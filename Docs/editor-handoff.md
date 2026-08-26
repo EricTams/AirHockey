@@ -96,6 +96,19 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 7. **Don't over-index on the current art.** It is placeholder. Keep formats
    general; the terrain rider is deliberately minimal and unreviewed.
 
+8. **Edits come back as a zip.** The editor offers "download my changes"; Eric
+   unzips it over `public/` and commits. A helper that opens a PR was weighed
+   and rejected: it would put a GitHub token and network egress into a tool
+   whose safety case rests on having neither. See decision 2.
+
+9. **Multi-map is in scope**, including a map list, creation, resize, and a
+   `warps` array (doc §10 names warps as the first post-v1 addition). An editor
+   with one map is not the thing we agreed to build.
+
+10. **Events land last, and the format is reviewed before the interpreter.**
+   Stage order puts everything the designer can actually use ahead of the
+   largest stage. Design the format, show it to Eric, then build.
+
 ---
 
 ## 4. Invariants
@@ -118,6 +131,27 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 ---
 
 ## 5. What to build next
+
+**Order** (settled 2026-08-26): 5.0 → 5.1 → 5.4 dialogue → 5.3 entities →
+5.2 import → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
+designer something to react to a stage sooner. Events last, per decision 10.
+
+### 5.0 Content routing
+
+`fetchJson` (`src/core/paths.ts`) and `Assets.texture` both resolve against
+`document.baseURI` unconditionally, so **the game only ever reads the site**.
+`EditorServer.readJson` has the read-through-with-fallback logic, but nothing in
+the game calls it. Two consequences, and the second is the sharp one:
+
+- A saved map does not change the world until the page reloads.
+- An **imported tileset PNG exists only in the content folder**, where
+  `Assets.texture` cannot see it. It falls back to a 48×48 placeholder — which
+  by decision 6 is exactly the silent re-indexing the rider file exists to
+  prevent.
+
+So both loaders need a content source that edit mode swings over to the helper
+(read local, fall back to the site) and back on exit. Small, but 5.1 through 5.6
+all sit on it. Do it first.
 
 ### 5.1 Editor shell and tile painting
 
@@ -190,7 +224,13 @@ conditions, flags and variables, conditional branches, loops, waits.
 
 Three pieces: a data format; an interpreter that runs across ticks (the game is
 a 60Hz fixed-timestep loop, so an event that waits has to suspend and resume,
-not block); and a command-list editor. This is the largest remaining stage —
+not block); and a command-list editor.
+
+**Most of this stage is runtime, not editor.** Flags and variables mean a game
+state store, and doc §1 puts save/load out of v1 scope, so none of it exists.
+And `OverworldMode.tryInteract` hardcodes talk → dialogue → battle; doc §158
+calls that rule "a stand-in for the future event system", so this stage
+replaces it. Budget accordingly. This is the largest remaining stage —
 comparable to everything above it combined. Design the format first and get it
 in front of Eric before building the interpreter.
 
@@ -198,20 +238,24 @@ Use our own vocabulary, not RPG Maker's.
 
 ---
 
+### 5.6 Multiple maps
+
+Per decision 9. `ENTRY_MAP` is a module constant and `OverworldMode.init()`
+loads exactly once, so this is runtime work as much as editor work: a map
+registry, load-on-warp, and a `warps` array in the format (doc §10) with the
+same strict validation as everything else. Editor side: a map list, create,
+and resize — resize has to re-index every layer and the collision grid, which is
+the one operation here that can quietly corrupt a file, so it wants a test.
+
 ## 6. Open questions for Eric
 
-1. **How does the designer's work get back?** Their edits live in their own
-   `airhockey-content/` folder with no route to the repo. Options: a "download
-   my changes" zip, the helper opening a PR, or manual copying. **This will bite
-   as soon as the designer has real work**, and it is the most urgent of these.
-2. **Should the Edit button be public?** It is currently visible to every
-   visitor of the published site. Harmless without a helper, but prominent.
-3. **Multiple maps.** The format assumes one entry map. Doc §10 says map
-   transitions via a `warps` array are the first post-v1 addition.
-4. **Does the importer need to handle non-48px grids** or sheets from other
-   tools?
+Answered 2026-08-26 — see decisions 8, 9 and 10. What remains:
 
----
+1. **Should the Edit button be public?** It is currently visible to every
+   visitor of the published site. Harmless without a helper, but prominent.
+   *Working assumption: yes, leave it public.*
+2. **Does the importer need to handle non-48px grids** or sheets from other
+   tools? *Working assumption: 48px only for now.*
 
 ## 7. Running and verifying
 

@@ -1,4 +1,4 @@
-import { EditorServer, SERVER_DOWNLOAD_URL, SERVER_FILENAME } from './server'
+import { EditorServer, serverDownloadUrl, SERVER_FILENAME } from './server'
 
 /**
  * The editor's front door: an Edit button, and the panel that explains how to
@@ -143,11 +143,13 @@ function step(n: number, title: string, ...body: (Node | string)[]): HTMLElement
     el('div', {}, el('h3', {}, title), ...body))
 }
 
+const CHIP_TEXT = 'Edit mode · game paused'
+
 export interface EditorUiHandlers {
   /** The helper is reachable and editing has begun. */
-  onEnter(server: EditorServer): void
+  onEnter(server: EditorServer): void | Promise<void>
   /** The designer has left the editor and wants the game back. */
-  onExit(): void
+  onExit(server: EditorServer): void | Promise<void>
 }
 
 export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServer } {
@@ -164,7 +166,7 @@ export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServe
   let poll: number | undefined
   let editing = false
 
-  const chip = el('div', { class: 'ed-chip' }, 'Edit mode · game paused')
+  const chip = el('div', { class: 'ed-chip' }, CHIP_TEXT)
   chip.hidden = true
   root.append(chip)
 
@@ -174,12 +176,18 @@ export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServe
   }
 
   function enterEditing(): void {
+    if (editing) return   // the poll and a manual retry can both land
     editing = true
     closePanel()
     button.dataset.state = 'ready'
     button.textContent = 'Exit editor'
     chip.hidden = false
-    handlers.onEnter(server)
+    // Entering does real work — indexing the content folder and rebuilding the
+    // scene from it — so the button flips first and the work runs behind it.
+    void Promise.resolve(handlers.onEnter(server)).catch((err) => {
+      console.error('[editor] could not start editing', err)
+      chip.textContent = 'Edit mode · could not load your content'
+    })
   }
 
   function exitEditing(): void {
@@ -188,7 +196,10 @@ export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServe
     delete button.dataset.state
     button.textContent = 'Edit'
     chip.hidden = true
-    handlers.onExit()
+    chip.textContent = CHIP_TEXT
+    void Promise.resolve(handlers.onExit(server)).catch((err) => {
+      console.error('[editor] could not restore the game', err)
+    })
   }
 
   async function connect(): Promise<void> {
@@ -235,7 +246,7 @@ export function mountEditorUi(handlers: EditorUiHandlers): { server: EditorServe
         ...(setup.installAfter ? [el('p', {}, setup.installAfter)] : [])),
       step(2, 'Download the editor helper',
         el('p', {}, 'One file. Nothing to install, nothing to check out.'),
-        el('a', { class: 'ed-dl', href: SERVER_DOWNLOAD_URL, download: SERVER_FILENAME },
+        el('a', { class: 'ed-dl', href: serverDownloadUrl(), download: SERVER_FILENAME },
           `Download ${SERVER_FILENAME}`)),
       step(3, 'Run it',
         el('p', {}, setup.terminal),

@@ -7,6 +7,7 @@ import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
 import { buildTileLayer } from '../world/tileLayer'
 import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type MapNpc } from '../world/map'
+import type { Tileset } from '../world/tileset'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
 import type { DialogueScript } from './dialogue'
@@ -44,6 +45,7 @@ export class OverworldMode implements Mode {
   private player?: CharacterSprite
 
   private map!: GameMap
+  private tileset!: Tileset
   private layers: THREE.Mesh[] = []
   private npcs: NpcSlot[] = []
 
@@ -62,7 +64,37 @@ export class OverworldMode implements Mode {
 
   async init(): Promise<void> {
     const { map, tileset } = await loadMap(ENTRY_MAP)
+    await this.applyMap(map, tileset)
+  }
+
+  /**
+   * Reload the current map from wherever content is being read from now.
+   *
+   * The editor calls this after a save, and on entering edit mode once reads
+   * have been pointed at the designer's own content folder. Loading is the only
+   * way an edit becomes visible: the scene is built once from the file.
+   */
+  async reload(path = ENTRY_MAP): Promise<void> {
+    const { map, tileset } = await loadMap(path)
+    await this.applyMap(map, tileset)
+  }
+
+  /**
+   * Build the scene for a map, replacing whatever was there.
+   *
+   * The player keeps its tile across a rebuild of the same map, so an edit does
+   * not walk them back to the start every stroke; a different map, or a tile
+   * that the edit put out of bounds, falls back to `playerStart`.
+   */
+  async applyMap(map: GameMap, tileset: Tileset): Promise<void> {
+    const sameMap = this.map?.id === map.id
+    const keepX = this.tx
+    const keepY = this.ty
+    const keepFacing = this.facing
+
+    this.disposeScene()
     this.map = map
+    this.tileset = tileset
 
     const sheet = await this.assets.texture(tileset.image, {
       label: 'TILESET', kind: 'tile', width: tileset.sheetW, height: tileset.sheetH,
@@ -75,10 +107,13 @@ export class OverworldMode implements Mode {
       this.scene.add(mesh)
     }
 
-    this.tx = map.playerStart.x
-    this.ty = map.playerStart.y
+    const inMap = sameMap && keepX < map.width && keepY < map.height
+    this.tx = inMap ? keepX : map.playerStart.x
+    this.ty = inMap ? keepY : map.playerStart.y
+    this.facing = inMap ? keepFacing : map.playerStart.facing
     this.stepFrom = [this.tx, this.ty]
-    this.facing = map.playerStart.facing
+    this.stepFrames = 0
+    this.turnGrace = 0
 
     const def = await fetchJson<CharacterDef>(PLAYER_CHARACTER)
     this.player = await CharacterSprite.load(def, this.assets)
@@ -94,7 +129,37 @@ export class OverworldMode implements Mode {
       if (slot.def.dialogue) slot.script = await fetchJson<DialogueScript>(slot.def.dialogue)
       if (slot.def.battle) slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
     }))
+
+    // Nothing calls lookAt() while the loop is paused, so leave the camera on
+    // the player rather than wherever the previous map left it.
+    this.proj.lookAt(this.tx, this.ty)
   }
+
+  /** Drop the meshes and sprites of the map being replaced. */
+  private disposeScene(): void {
+    for (const mesh of this.layers) {
+      this.scene.remove(mesh)
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+    }
+    this.layers = []
+    // Textures belong to Assets and are shared; CharacterSprite.dispose drops
+    // only the geometry and material it owns.
+    this.player?.dispose()
+    for (const npc of this.npcs) npc.sprite?.dispose()
+    this.sprites.clear()
+    this.player = undefined
+    this.npcs = []
+  }
+
+  /** The map currently in the scene. The editor edits this object in place. */
+  get currentMap(): GameMap { return this.map }
+  /** The tileset its indices refer to. */
+  get currentTileset(): Tileset { return this.tileset }
+  /** For the editor's own overlay geometry. */
+  get worldScene(): THREE.Scene { return this.scene }
+  /** For the editor's camera control; nothing drives it while paused. */
+  get projection(): Projection { return this.proj }
 
   enter(): void {}
   exit(): void {}

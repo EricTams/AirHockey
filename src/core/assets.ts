@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { makePlaceholderTexture, type PlaceholderOpts } from '../world/placeholder'
 import { findMissing } from '../world/missingArt'
-import { assetUrl } from './paths'
+import { contentUrl } from './paths'
 
 /**
  * Texture cache with a placeholder fallback: a missing or broken file yields a
@@ -30,7 +30,7 @@ export class Assets {
 
     let tex: THREE.Texture
     try {
-      tex = await this.loadImage(assetUrl(path))
+      tex = await this.loadImage(contentUrl(path))
     } catch {
       const known = findMissing(path)
       tex = makePlaceholderTexture({
@@ -62,6 +62,23 @@ export class Assets {
       img.onerror = () => reject(new Error(`failed to load ${url}`))
       img.src = url
     })
+  }
+
+  /**
+   * Drop a cached texture so the next request reloads it.
+   *
+   * The cache is keyed by logical path, which is what makes an edit invisible:
+   * re-importing a sheet writes new bytes to the same path and would otherwise
+   * keep showing the old image for the rest of the session. Returns true if
+   * something was actually cached.
+   */
+  invalidate(path: string): boolean {
+    const tex = this.cache.get(path)
+    if (!tex) return false
+    tex.dispose()
+    this.cache.delete(path)
+    this.substituted.delete(path)
+    return true
   }
 
   dispose(): void {
