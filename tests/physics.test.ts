@@ -120,11 +120,44 @@ describe('opponentTarget', () => {
     expect(sim.speed).toBeGreaterThan(0.2)
   })
 
-  it('falls back to the home line when the puck is deep in the player half', () => {
+  it('holds a defensive line when the puck is deep in the player half', () => {
     const sim = new BattleSim(CFG)
     Object.assign(sim.puck, { x: 1.0, y: -3.0, vx: 0, vy: 0 })
     const t = opponentTarget(sim)
-    expect(t.y).toBeCloseTo((CFG.table.length / 2) * 0.45, 5)
+    // Waits in its own half, forward of goal, tracking the puck's x. A bolder
+    // opponent holds further forward, so this is a range rather than a point.
+    expect(t.y).toBeGreaterThan(0)
+    expect(t.y).toBeLessThan((CFG.table.length / 2) * 0.45)
+    expect(t.x).toBeCloseTo(0.6, 5)
+  })
+
+  it('drives through a puck in the open toward the player goal', () => {
+    const sim = new BattleSim(CFG)
+    Object.assign(sim.puck, { x: 0.4, y: 2.2, vx: 0, vy: 0 })
+    const t = opponentTarget(sim)
+    expect(t.y).toBeLessThan(sim.puck.y)     // behind it, pushing down-table
+    expect(t.x).toBeCloseTo(0.4, 5)
+  })
+
+  it('clears a wall-hugging puck ALONG the wall, never into it', () => {
+    // The paddle is wider than the gap a wall-flush puck leaves, so it can
+    // never get between puck and wall. Pushing inward would only pin it; the
+    // clearing move is to sit up-table and drive it back down.
+    const sim = new BattleSim(CFG)
+    Object.assign(sim.puck, { x: 1.85, y: 1.8, vx: 0, vy: 0 })
+    const t = opponentTarget(sim)
+    expect(t.y).toBeGreaterThan(sim.puck.y)
+    expect(t.x).toBeCloseTo(1.85, 5)
+  })
+
+  it('disengages from a puck jammed into its own corner', () => {
+    // Nothing reachable clears it there, and pressing is what holds it. So it
+    // backs off and lets the puck come out rather than pinning it forever.
+    const sim = new BattleSim(CFG)
+    Object.assign(sim.puck, { x: 1.85, y: 3.3, vx: 0, vy: 0 })
+    const t = opponentTarget(sim)
+    expect(t.y).toBeLessThan(sim.puck.y - 1)
+    expect(Math.abs(t.x)).toBeLessThan(Math.abs(sim.puck.x))
   })
 })
 
@@ -274,5 +307,79 @@ describe('inert opponents', () => {
     Object.assign(sim.puck, { x: 0, y: 1.0, vx: 0, vy: 0 })
     const t = opponentTarget(sim)
     expect(Math.abs(t.x)).toBeGreaterThan(CFG.table.width * 0.3)
+  })
+})
+
+describe('puck elasticity', () => {
+  const corner = (sim: BattleSim) => {
+    const { width, length } = CFG.table
+    const r = CFG.puck.radius
+    Object.assign(sim.puck, { x: width / 2 - r, y: length / 2 - r, vx: 0, vy: 0 })
+  }
+  const HOLD = { x: CFG.table.width / 2 - CFG.paddle.radius, y: CFG.table.length / 2 - CFG.paddle.radius }
+  const AWAY_HOME = { x: 0, y: CFG.table.length * 0.4 }
+
+  it('stores compression while a paddle pins the puck to a wall', () => {
+    const sim = new BattleSim(CFG)
+    corner(sim)
+    for (let i = 0; i < 60; i++) sim.step(DT, AWAY, HOLD)
+    expect(sim.compression).toBeGreaterThan(0)
+    // And the puck really is held still while it is being squeezed.
+    expect(sim.speed).toBeLessThan(0.2)
+  })
+
+  it('springs the puck out when the paddle withdraws', () => {
+    const sim = new BattleSim(CFG)
+    corner(sim)
+    for (let i = 0; i < 60; i++) sim.step(DT, AWAY, HOLD)
+    expect(sim.compression).toBeGreaterThan(0)
+
+    // The paddle only travels maxSpeed per tick, so contact takes a few ticks
+    // to break — the spring fires when it does, not the instant aim changes.
+    let released = -1
+    for (let i = 0; i < 60 && released < 0; i++) {
+      sim.step(DT, AWAY, AWAY_HOME)
+      if (sim.compression === 0) released = i
+    }
+    expect(released).toBeGreaterThanOrEqual(0)
+    expect(sim.speed).toBeGreaterThan(1)
+  })
+
+  it('springs it away from the walls that were holding it', () => {
+    const sim = new BattleSim(CFG)
+    corner(sim)
+    for (let i = 0; i < 60; i++) sim.step(DT, AWAY, HOLD)
+    for (let i = 0; i < 40; i++) sim.step(DT, AWAY, AWAY_HOME)
+    // Out of the corner along the diagonal: inward in x, down-table in y.
+    expect(sim.puck.x).toBeLessThan(CFG.table.width / 2 - 0.6)
+    expect(sim.puck.y).toBeLessThan(CFG.table.length / 2 - 0.6)
+  })
+
+  it('stores nothing for a puck struck in open play', () => {
+    const sim = new BattleSim(CFG)
+    Object.assign(sim.puck, { x: 0, y: 1.0, vx: 0, vy: 0 })
+    for (let i = 0; i < 40; i++) sim.step(DT, AWAY, { x: 0, y: 1.4 })
+    expect(sim.compression).toBe(0)
+  })
+
+  it('caps how much a long pin can store', () => {
+    const sim = new BattleSim(CFG)
+    corner(sim)
+    for (let i = 0; i < 600; i++) sim.step(DT, AWAY, HOLD)
+    const long = sim.compression
+    const sim2 = new BattleSim(CFG)
+    corner(sim2)
+    for (let i = 0; i < 90; i++) sim2.step(DT, AWAY, HOLD)
+    // Leaning on it for ten seconds is no more loaded than for one and a half.
+    expect(long).toBeCloseTo(sim2.compression, 5)
+  })
+
+  it('clears stored compression on a faceoff', () => {
+    const sim = new BattleSim(CFG)
+    corner(sim)
+    for (let i = 0; i < 60; i++) sim.step(DT, AWAY, HOLD)
+    expect(sim.compression).toBeGreaterThan(0)
+    sim.faceoff(0)
+    expect(sim.compression).toBe(0)
   })
 })

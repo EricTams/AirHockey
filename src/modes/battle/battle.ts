@@ -389,12 +389,26 @@ export class BattleMode implements Mode {
   private debugKeys(): void {
     if (this.input.pressed('debugTrap')) {
       const { width, length } = this.sim.cfg.table
+      const r = this.sim.cfg.puck.radius
       const side = this.sim.puck.x >= 0 ? -1 : 1     // alternate corners
+
+      // Wedge it right into the angle where the side wall meets the AI's own
+      // end wall, drifting into both. That is where a grind actually starts:
+      // the paddle can only just reach, and every strike rebounds off a wall
+      // straight back into the same pocket.
       Object.assign(this.sim.puck, {
-        x: side * (width / 2 - this.sim.cfg.puck.radius - 0.02),
-        y: length * 0.33,
-        vx: side * 0.4,
-        vy: 0.3,
+        x: side * (width / 2 - r - 0.01),
+        y: length / 2 - r - 0.04,
+        vx: side * 0.25,
+        vy: 0.15,
+      })
+      // Seat the opponent alongside it, so the grind begins at once instead of
+      // waiting for the AI to travel across the table.
+      Object.assign(this.sim.opponent, {
+        x: side * (width / 2 - this.sim.cfg.paddle.radius),
+        y: length / 2 - this.sim.cfg.paddle.radius,
+        vx: 0,
+        vy: 0,
       })
       if (this.phase === 'ready') { this.phase = 'play'; this.timer = 0 }
     }
@@ -612,6 +626,7 @@ export class BattleMode implements Mode {
       repeats: this.ai.repeats,
       autoPlay: this.autoPlay ? 'on (Y)' : 'off (Y)',
       puck: `${this.sim?.puck.x.toFixed(1)},${this.sim?.puck.y.toFixed(1)}`,
+      squeeze: this.sim?.compression.toFixed(2) ?? '-',
     }
   }
 

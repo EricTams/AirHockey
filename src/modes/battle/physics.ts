@@ -79,6 +79,17 @@ const SUBSTEPS = 4
 const PIPE_COOLDOWN = 8
 /** Sub-steps between wing hits, so one contact cannot burn every hit. */
 const WING_COOLDOWN = 12
+/**
+ * Fake elasticity. A puck squeezed between a paddle and a wall has nowhere to
+ * go, so the sim just holds it there — pull the paddle off and it sits inert,
+ * which feels dead. Instead the squeeze is stored as compression and returned
+ * as velocity when the pinch releases, so a trapped puck springs out.
+ */
+const COMPRESS_PER_SUBSTEP = 0.09
+/** Ceiling on stored compression, in the same units as puck speed. */
+const MAX_COMPRESSION = 3.2
+/** Fraction of stored compression handed back as velocity on release. */
+const RELEASE_EFFICIENCY = 0.85
 const DEG = Math.PI / 180
 
 export class BattleSim {
@@ -97,6 +108,19 @@ export class BattleSim {
    * when it is repeating itself.
    */
   lastOpponentHit?: { x: number; y: number; vx: number; vy: number }
+  /**
+   * True while the opponent's paddle overlaps the puck, struck or not. A puck
+   * wedged in a corner rests against a motionless paddle: there is no impulse
+   * and so no strike, but it is still pinned.
+   */
+  opponentContact = false
+  /**
+   * Energy stored in a puck currently pinched against a wall, and the direction
+   * it will spring when released. Surfaced for the debug overlay.
+   */
+  compression = 0
+  private releaseX = 0
+  private releaseY = 0
 
   private pipeCooldown = 0
   private wingCooldown = 0
@@ -119,6 +143,56 @@ export class BattleSim {
     return this.obstacles.filter((o): o is BlockObstacle => o.kind === 'block')
   }
 
+  /**
+   * Squeeze bookkeeping. `pinch` is the inward wall normal when the puck is
+   * pressed against a wall by a paddle, or undefined when it is free.
+   */
+  private updateCompression(pinch: Vec | undefined): void {
+    if (pinch) {
+      this.compression = Math.min(MAX_COMPRESSION, this.compression + COMPRESS_PER_SUBSTEP)
+      this.releaseX = pinch.x
+      this.releaseY = pinch.y
+      return
+    }
+    if (this.compression <= 0) return
+
+    // Released: hand the stored squeeze back as motion, directed off the wall
+    // that was holding the puck in.
+    const push = this.compression * RELEASE_EFFICIENCY
+    this.puck.vx += this.releaseX * push
+    this.puck.vy += this.releaseY * push
+    this.compression = 0
+  }
+
+  /**
+   * The inward wall normal if the puck is currently pinched between a paddle
+   * and a wall, otherwise undefined. In a corner both axes contribute, so it
+   * springs out along the diagonal.
+   */
+  private pinchNormal(): Vec | undefined {
+    const { width, length } = this.cfg.table
+    const r = this.cfg.puck.radius
+    // Contact resolution leaves the puck at *exactly* this separation, so the
+    // test needs a hair of tolerance or resting contact never registers.
+    const sum = this.cfg.paddle.radius + r + 0.02
+    const touching =
+      Math.hypot(this.puck.x - this.player.x, this.puck.y - this.player.y) < sum ||
+      Math.hypot(this.puck.x - this.opponent.x, this.puck.y - this.opponent.y) < sum
+    if (!touching) return undefined
+
+    const slack = 0.02
+    let nx = 0
+    let ny = 0
+    if (this.puck.x >= width / 2 - r - slack) nx = -1
+    else if (this.puck.x <= -width / 2 + r + slack) nx = 1
+    if (this.puck.y >= length / 2 - r - slack) ny = -1
+    else if (this.puck.y <= -length / 2 + r + slack) ny = 1
+    if (nx === 0 && ny === 0) return undefined
+
+    const len = Math.hypot(nx, ny)
+    return { x: nx / len, y: ny / len }
+  }
+
   /** Reset for a faceoff, nudged toward whoever conceded (doc §8.3). */
   faceoff(offsetY = 0): void {
     const { length } = this.cfg.table
@@ -127,6 +201,7 @@ export class BattleSim {
     Object.assign(this.opponent, { x: 0, y: length * 0.35, vx: 0, vy: 0 })
     this.pipeCooldown = 0
     this.wingCooldown = 0
+    this.compression = 0
   }
 
   /** Clamp a paddle target into that paddle's own half, inset by its radius. */
@@ -280,6 +355,7 @@ export class BattleSim {
     let result: StepResult = 'none'
     this.lastPipeUsed = undefined
     this.lastOpponentHit = undefined
+    this.opponentContact = false
 
     for (let i = 0; i < SUBSTEPS; i++) {
       this.movePaddle(this.player, playerTarget, sub, true)
@@ -302,6 +378,10 @@ export class BattleSim {
       }
 
       this.collideCircle(this.player.x, this.player.y, this.cfg.paddle.radius, this.player.vx, this.player.vy)
+      const sum = this.cfg.paddle.radius + this.cfg.puck.radius
+      if (Math.hypot(this.puck.x - this.opponent.x, this.puck.y - this.opponent.y) < sum) {
+        this.opponentContact = true
+      }
       if (this.collideCircle(
         this.opponent.x, this.opponent.y, this.cfg.paddle.radius,
         this.opponent.vx, this.opponent.vy,
@@ -327,6 +407,7 @@ export class BattleSim {
       }
 
       this.tryPipes()
+      this.updateCompression(this.pinchNormal())
       this.clampSpeed()
     }
 
