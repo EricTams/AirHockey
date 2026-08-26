@@ -65,6 +65,8 @@ export const EDITOR_CSS = `
   padding: 6px 8px; color: #dbe6f5; font: inherit; font-size: 11px; line-height: 1.5;
   resize: vertical; }
 .ed-textarea:focus { outline: none; border-color: #4a7bb5; }
+.ed-num { flex: 0 1 58px; min-width: 44px; }
+.ed-x { color: #6d7d92; font-size: 11px; flex: none; }
 .ed-file { flex: 1; min-width: 0; color: #97a7bb; font: inherit; font-size: 11px; }
 .ed-file::file-selector-button { margin-right: 8px; padding: 5px 10px; border-radius: 5px;
   border: 1px solid #2a3444; background: #1a2230; color: #d3dfec; font: inherit;

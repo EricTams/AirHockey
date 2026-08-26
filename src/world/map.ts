@@ -28,6 +28,26 @@ export interface MapProp {
   y: number
 }
 
+/**
+ * A tile that moves the player to another map (doc §10: the first post-v1
+ * addition, and the format was written to tolerate it).
+ *
+ * The destination tile cannot be validated here: it lives in a file this map
+ * does not load. A warp pointing off the edge of its destination lands the
+ * player at that map's playerStart instead of nowhere.
+ */
+export interface MapWarp {
+  id: string
+  x: number
+  y: number
+  /** Project-relative path to the destination map. */
+  to: string
+  toX: number
+  toY: number
+  /** Facing on arrival. Omitted keeps whichever way the player was walking. */
+  facing?: Facing
+}
+
 export interface MapNpc {
   id: string
   /** Project-relative path to a character definition JSON. */
@@ -54,6 +74,8 @@ export interface GameMap {
   npcs: MapNpc[]
   /** Multi-cell props placed as billboards. Optional; absent means none. */
   props: MapProp[]
+  /** Tiles that lead to other maps. Optional; absent means none. */
+  warps: MapWarp[]
 }
 
 /** A map paired with the resolved tileset its indices refer to. */
@@ -151,7 +173,31 @@ export function parseMap(raw: unknown, tileset: Tileset, path = 'map'): GameMap 
     if (!inRange(p.x, w) || !inRange(p.y, h)) fail(at, `tile ${p.x},${p.y} is outside ${w}x${h}`)
   })
 
-  return { ...(m as GameMap), width: w, height: h, npcs, props }
+  const warps = m.warps ?? []
+  if (!Array.isArray(warps)) fail(path, '"warps" must be an array')
+  const seenWarps = new Set<string>()
+  warps.forEach((wp, i) => {
+    const at = `${path}: warp[${i}]`
+    if (typeof wp.id !== 'string' || !wp.id) fail(at, 'missing "id"')
+    if (seenWarps.has(wp.id)) fail(at, `duplicate id "${wp.id}"`)
+    seenWarps.add(wp.id)
+    if (typeof wp.to !== 'string' || !wp.to) fail(at, 'missing "to"')
+    if (!inRange(wp.x, w) || !inRange(wp.y, h)) fail(at, `tile ${wp.x},${wp.y} is outside ${w}x${h}`)
+    // The destination is in another file, so only its shape can be checked
+    // here. Arriving out of bounds falls back to that map's playerStart.
+    if (!Number.isInteger(wp.toX) || (wp.toX as number) < 0) fail(at, `invalid "toX" ${wp.toX}`)
+    if (!Number.isInteger(wp.toY) || (wp.toY as number) < 0) fail(at, `invalid "toY" ${wp.toY}`)
+    if (wp.facing !== undefined && !FACINGS.includes(wp.facing)) {
+      fail(at, `facing "${wp.facing}" invalid`)
+    }
+  })
+
+  return { ...(m as GameMap), width: w, height: h, npcs, props, warps }
+}
+
+/** The warp on a tile, if any. */
+export function warpAt(map: GameMap, x: number, y: number): MapWarp | undefined {
+  return map.warps.find((wp) => wp.x === x && wp.y === y)
 }
 
 function inRange(v: unknown, limit: number): boolean {

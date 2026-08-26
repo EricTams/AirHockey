@@ -56,6 +56,7 @@ loads `public/data/maps/overworld.json`.
 | `src/editor/tilesetEditor.ts` | Sheet import and the review screen |
 | `src/editor/sheetAnalysis.ts` | Coverage measurement and prop clustering |
 | `src/editor/tilesetFile.ts` | Diffable rider serialisation |
+| `src/editor/mapPicker.ts` | Map list, new map, resize |
 
 **The helper works.** One dependency-free file the designer downloads from the
 published site. Creates `airhockey-content/`, writes only there, no clone and no
@@ -100,11 +101,16 @@ On the shipped sheet the importer proposes exactly the failure decision 5
 predicted: one 9x9 prop swallowing everything. That is the review screen earning
 its place, not a bug to tune out.
 
+**Multiple maps work.** A map picker with create and resize, and warps as a
+placeable entity kind. `warps` is in the format and validated; the overworld
+follows one on arrival, holding the sim still while the destination loads.
+Verified end to end: place a warp, save, exit, walk into it, arrive.
+
 The dock has tabs (Map, Entities, Dialogue, Sheet) — that is where events go.
 
 ### Not started
 
-Multiple maps, events. That is section 5.
+Events. That is section 5.5, and it is the whole of what remains.
 
 ---
 
@@ -174,6 +180,9 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 - Content is addressed by project-relative path (`data/maps/overworld.json`),
   the same string the game fetches by and the helper writes by.
 - Map files stay diffable: one grid row per line.
+- Every grid is row-major, so a width change re-indexes every cell after the
+  first row. `resizeMap` does; anything that truncates instead produces a
+  scrambled map that still validates.
 - Validation is strict and loud. The editor writes these files; a bad save must
   fail at load, not half-draw a world.
 
@@ -182,7 +191,7 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 ## 5. What to build next
 
 **Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → ~~5.4 dialogue~~ → ~~5.3 entities~~
-→ ~~5.2 import~~ → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
+→ ~~5.2 import~~ → ~~5.6 multiple maps~~ → 5.5 events. Dialogue is cheap and gets the
 designer something to react to a stage sooner. Events last, per decision 10.
 
 ### 5.0 Content routing — DONE
@@ -287,7 +296,7 @@ Use our own vocabulary, not RPG Maker's.
 
 ---
 
-### 5.6 Multiple maps
+### 5.6 Multiple maps — DONE
 
 Per decision 9. `ENTRY_MAP` is a module constant and `OverworldMode.init()`
 loads exactly once, so this is runtime work as much as editor work: a map

@@ -1,5 +1,5 @@
 import type { EditorServer } from './server'
-import type { GameMap, MapNpc, MapProp } from '../world/map'
+import type { GameMap, MapNpc, MapProp, MapWarp } from '../world/map'
 import type { Tileset } from '../world/tileset'
 import type { Facing } from '../world/character'
 import type { MapDoc, Touched } from './mapDoc'
@@ -20,6 +20,8 @@ import { el } from './dom'
  */
 
 const FACINGS: Facing[] = ['down', 'up', 'left', 'right']
+
+type PlaceKind = 'npc' | 'prop' | 'warp'
 const DEFAULT_CHARACTER = 'data/characters/character-2.json'
 
 /**
@@ -32,6 +34,7 @@ export const PLAYER_START = '__player-start__'
 export type Selection =
   | { kind: 'npc'; id: string }
   | { kind: 'prop'; id: string }
+  | { kind: 'warp'; id: string }
   | { kind: 'start' }
 
 export interface EntityHost {
@@ -50,13 +53,14 @@ export class EntityEditor {
 
   private selected?: Selection
   /** Set while a "place" button is armed and the next click drops an entity. */
-  private placing?: 'npc' | 'prop'
+  private placing?: PlaceKind
   private dragging = false
 
   private ui!: {
     list: HTMLElement
     addNpc: HTMLButtonElement
     addProp: HTMLButtonElement
+    addWarp: HTMLButtonElement
     del: HTMLButtonElement
     inspector: HTMLElement
     empty: HTMLElement
@@ -129,7 +133,7 @@ export class EntityEditor {
 
   // --- Edits ---------------------------------------------------------------
 
-  private place(kind: 'npc' | 'prop', cell: Cell): void {
+  private place(kind: PlaceKind, cell: Cell): void {
     const doc = this.host.doc()
     if (!doc.inBounds(cell.x, cell.y)) return
 
@@ -144,6 +148,18 @@ export class EntityEditor {
         map.props.push({ id, prop: shape.id, x: cell.x, y: cell.y })
       })
       this.selected = { kind: 'prop', id }
+      this.after(touched)
+      return
+    }
+
+    if (kind === 'warp') {
+      const id = uniqueId(doc.map.warps.map((w) => w.id), 'warp')
+      const touched = doc.editMap('place warp', (map) => {
+        // Points at this map by default, which is visibly wrong rather than
+        // quietly broken: a warp with no destination would fail validation.
+        map.warps.push({ id, x: cell.x, y: cell.y, to: doc.path, toX: 0, toY: 0 })
+      })
+      this.selected = { kind: 'warp', id }
       this.after(touched)
       return
     }
@@ -186,9 +202,12 @@ export class EntityEditor {
       if (sel.kind === 'npc') {
         const i = map.npcs.findIndex((n) => n.id === sel.id)
         if (i >= 0) map.npcs.splice(i, 1)
-      } else {
+      } else if (sel.kind === 'prop') {
         const i = map.props.findIndex((p) => p.id === sel.id)
         if (i >= 0) map.props.splice(i, 1)
+      } else if (sel.kind === 'warp') {
+        const i = map.warps.findIndex((w) => w.id === sel.id)
+        if (i >= 0) map.warps.splice(i, 1)
       }
     })
     this.selected = undefined
@@ -227,11 +246,15 @@ export class EntityEditor {
 
   // --- Lookups -------------------------------------------------------------
 
-  private find(map: GameMap, sel: Selection): MapNpc | MapProp | GameMap['playerStart'] | undefined {
-    if (sel.kind === 'start') return map.playerStart
-    return sel.kind === 'npc'
-      ? map.npcs.find((n) => n.id === sel.id)
-      : map.props.find((p) => p.id === sel.id)
+  private find(
+    map: GameMap, sel: Selection,
+  ): MapNpc | MapProp | MapWarp | GameMap['playerStart'] | undefined {
+    switch (sel.kind) {
+      case 'start': return map.playerStart
+      case 'npc': return map.npcs.find((n) => n.id === sel.id)
+      case 'prop': return map.props.find((p) => p.id === sel.id)
+      case 'warp': return map.warps.find((w) => w.id === sel.id)
+    }
   }
 
   private position(map: GameMap, sel: Selection): Cell | undefined {
@@ -245,6 +268,8 @@ export class EntityEditor {
     if (npc) return { kind: 'npc', id: npc.id }
     const prop = map.props.find((p) => p.x === cell.x && p.y === cell.y)
     if (prop) return { kind: 'prop', id: prop.id }
+    const warp = map.warps.find((w) => w.x === cell.x && w.y === cell.y)
+    if (warp) return { kind: 'warp', id: warp.id }
     const start = map.playerStart
     return start.x === cell.x && start.y === cell.y ? { kind: 'start' } : undefined
   }
@@ -254,6 +279,7 @@ export class EntityEditor {
     const marks: Cell[] = [
       ...map.npcs.map((n) => ({ x: n.x, y: n.y })),
       ...map.props.map((p) => ({ x: p.x, y: p.y })),
+      ...map.warps.map((w) => ({ x: w.x, y: w.y })),
       { x: map.playerStart.x, y: map.playerStart.y },
     ]
     const sel = this.selected ? this.position(map, this.selected) : undefined
@@ -269,6 +295,8 @@ export class EntityEditor {
     addNpc.onclick = () => { addNpc.blur(); this.arm('npc') }
     const addProp = el('button', { class: 'ed-icon', type: 'button' }, '+ Prop')
     addProp.onclick = () => { addProp.blur(); this.arm('prop') }
+    const addWarp = el('button', { class: 'ed-icon', type: 'button', title: 'Place a warp' }, '+ Warp')
+    addWarp.onclick = () => { addWarp.blur(); this.arm('warp') }
     const del = el('button', { class: 'ed-icon', type: 'button', title: 'Delete' }, '✕')
     del.onclick = () => { del.blur(); this.remove() }
 
@@ -279,15 +307,15 @@ export class EntityEditor {
 
     this.root.append(
       list,
-      el('div', { class: 'ed-sec' }, el('div', { class: 'ed-seg' }, addNpc, addProp, del), hint),
+      el('div', { class: 'ed-sec' }, el('div', { class: 'ed-seg' }, addNpc, addProp, addWarp, del), hint),
       inspector,
       empty,
     )
-    this.ui = { list, addNpc, addProp, del, inspector, empty, hint }
+    this.ui = { list, addNpc, addProp, addWarp, del, inspector, empty, hint }
     this.updateHint()
   }
 
-  private arm(kind: 'npc' | 'prop'): void {
+  private arm(kind: PlaceKind): void {
     this.placing = this.placing === kind ? undefined : kind
     this.updateHint()
   }
@@ -299,6 +327,7 @@ export class EntityEditor {
     this.ui.hint.hidden = !this.placing
     this.ui.addNpc.setAttribute('aria-pressed', String(this.placing === 'npc'))
     this.ui.addProp.setAttribute('aria-pressed', String(this.placing === 'prop'))
+    this.ui.addWarp.setAttribute('aria-pressed', String(this.placing === 'warp'))
     // Nothing to place until a sheet has been imported and its props marked
     // out, so say that on the button rather than on the click that fails.
     const hasProps = this.host.tileset().props.length > 0
@@ -319,7 +348,7 @@ export class EntityEditor {
         class: 'ed-line', 'aria-selected': String(on), role: 'button',
       },
         el('span', { class: 'ed-linekind' },
-          sel.kind === 'npc' ? 'NPC' : sel.kind === 'prop' ? 'prop' : 'start'),
+          { npc: 'NPC', prop: 'prop', warp: 'warp', start: 'start' }[sel.kind]),
         el('span', { class: 'ed-linewho' }, label),
         el('span', { class: 'ed-linetext' }, where))
       row.onclick = () => {
@@ -333,6 +362,7 @@ export class EntityEditor {
     add({ kind: 'start' }, 'Player', `${map.playerStart.x},${map.playerStart.y}`)
     for (const n of map.npcs) add({ kind: 'npc', id: n.id }, n.id, `${n.x},${n.y}`)
     for (const p of map.props) add({ kind: 'prop', id: p.id }, p.id, `${p.x},${p.y}`)
+    for (const w of map.warps) add({ kind: 'warp', id: w.id }, w.id, `${w.x},${w.y}`)
     this.ui.list.replaceChildren(...rows)
     this.updateHint()
   }
@@ -348,7 +378,8 @@ export class EntityEditor {
     this.ui.inspector.replaceChildren(...(
       sel.kind === 'start' ? this.startFields(map)
         : sel.kind === 'npc' ? this.npcFields(map, entity as MapNpc)
-          : this.propFields(entity as MapProp)
+          : sel.kind === 'warp' ? this.warpFields(entity as MapWarp)
+            : this.propFields(entity as MapProp)
     ))
   }
 
@@ -424,6 +455,59 @@ export class EntityEditor {
     ]
   }
 
+  /**
+   * A warp's destination tile is on a map this one does not load, so nothing
+   * here can check it. The runtime falls back to the destination's own
+   * playerStart rather than putting the player nowhere, and the field says so.
+   */
+  private warpFields(warp: MapWarp): HTMLElement[] {
+    const out: HTMLElement[] = []
+    const set = (mutate: (w: MapWarp) => void, label: string) => {
+      const sel = this.selected
+      if (sel?.kind !== 'warp') return
+      const touched = this.host.doc().editMap(label, (map) => {
+        const found = map.warps.find((w) => w.id === sel.id)
+        if (found) mutate(found)
+      })
+      this.after(touched, false)
+    }
+
+    out.push(el('label', {}, 'Id'))
+    out.push(textField(warp.id, (v) => {
+      const clean = v.trim()
+      if (!clean) return
+      const was = warp.id
+      set((w) => { w.id = clean }, 'rename')
+      if (this.selected?.kind === 'warp' && this.selected.id === was) {
+        this.selected = { kind: 'warp', id: clean }
+      }
+    }))
+
+    out.push(el('label', {}, 'Goes to'))
+    out.push(this.pathField(warp.to, 'data/maps/', (v) => set((w) => { w.to = v }, 'warp target')))
+
+    out.push(el('label', {}, 'Arrives at'))
+    const x = numberField(warp.toX, (v) => set((w) => { w.toX = v }, 'warp tile'))
+    const y = numberField(warp.toY, (v) => set((w) => { w.toY = v }, 'warp tile'))
+    out.push(el('div', { class: 'ed-row2' }, x, el('span', { class: 'ed-x' }, ','), y))
+
+    out.push(el('label', {}, 'Facing on arrival'))
+    const facing = el('select', { class: 'ed-select' })
+    facing.replaceChildren(el('option', { value: '' }, 'keep walking'),
+      ...FACINGS.map((f) => el('option', { value: f }, f)))
+    facing.value = warp.facing ?? ''
+    facing.onchange = () => set((w) => {
+      if (facing.value) w.facing = facing.value as Facing
+      else delete w.facing
+    }, 'warp facing')
+    out.push(facing)
+
+    out.push(el('div', { class: 'ed-hint' },
+      `On ${warp.x},${warp.y}. The destination tile is in another file and is not ` +
+      'checked here; if it is off that map, the player arrives at its own start.'))
+    return out
+  }
+
   private propFields(prop: MapProp): HTMLElement[] {
     const out: HTMLElement[] = []
     const tileset = this.host.tileset()
@@ -476,6 +560,17 @@ export class EntityEditor {
       ...[...known].sort().map((p) => el('option', { value: p })))
     return el('div', {}, input, datalist)
   }
+}
+
+function numberField(value: number, onChange: (v: number) => void): HTMLInputElement {
+  const input = el('input', { class: 'ed-input2 ed-num', type: 'number', min: '0', step: '1' })
+  input.value = String(value)
+  input.onchange = () => {
+    const n = Number(input.value)
+    if (Number.isInteger(n) && n >= 0) onChange(n)
+    else input.value = String(value)
+  }
+  return input
 }
 
 function textField(value: string, onChange: (v: string) => void): HTMLInputElement {

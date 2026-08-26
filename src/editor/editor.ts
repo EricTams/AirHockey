@@ -6,7 +6,7 @@ import { parseMap, type LayerName } from '../world/map'
 import { EMPTY_TILE, isPaintable, parseTileset } from '../world/tileset'
 import { fetchJson } from '../core/paths'
 import { MIN_ZOOM, MAX_ZOOM } from '../world/projection'
-import { MapDoc, COLLISION, isNothing, type EditTarget, type Touched } from './mapDoc'
+import { MapDoc, COLLISION, isNothing, blankMap, resizeMap, type EditTarget, type Touched } from './mapDoc'
 import { TOOLS, toolCells, rectCells, isPreviewTool, type Cell, type Tool } from './tools'
 import { TilePalette } from './palette'
 import { EditorOverlay } from './overlay'
@@ -17,9 +17,11 @@ import { el, checkbox } from './dom'
 import { DialogueEditor } from './dialogueEditor'
 import { EntityEditor } from './entityEditor'
 import { TilesetEditor } from './tilesetEditor'
+import { MapPicker } from './mapPicker'
 import type { ModeManager } from '../core/mode'
 import type { DialogueMode } from '../modes/dialogue'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
+import type { Tileset } from '../world/tileset'
 
 /**
  * The editing session: everything that exists only while the designer is
@@ -84,6 +86,7 @@ export class Editor {
   private dialogueEditor?: DialogueEditor
   private entityEditor?: EntityEditor
   private tilesetEditor?: TilesetEditor
+  private mapPicker?: MapPicker
   private target: EditTarget = 'ground'
   private tool: Tool = 'brush'
   private erasing = false
@@ -188,6 +191,17 @@ export class Editor {
       message: (text, tone) => this.message(text, tone),
     })
 
+    this.mapPicker = new MapPicker({
+      server,
+      currentMap: () => this.doc!.map,
+      currentPath: () => this.doc!.path,
+      dirty: () => this.dirty,
+      openMap: (path) => this.openMap(path),
+      createMap: (id, width, height) => this.createMap(id, width, height),
+      resizeMap: (width, height) => this.resize(width, height),
+      message: (text, tone) => this.message(text, tone),
+    })
+
     this.tilesetEditor = new TilesetEditor({
       server,
       assets: this.host.assets,
@@ -264,6 +278,7 @@ export class Editor {
     this.dialogueEditor = undefined
     this.entityEditor = undefined
     this.tilesetEditor = undefined
+    this.mapPicker = undefined
     this.tab = 'map'
     this.doc = undefined
     this.overlay = undefined
@@ -485,6 +500,77 @@ export class Editor {
     }
   }
 
+  // --- Maps ----------------------------------------------------------------
+
+  /** Open a different map, replacing the document and everything built from it. */
+  private async openMap(path: string): Promise<void> {
+    try {
+      await this.host.overworld.reload(path)
+      const map = this.host.overworld.currentMap
+      this.adoptMap(new MapDoc(path, map), this.host.overworld.currentTileset)
+      this.message(`Opened ${map.id}`, 'ok')
+    } catch (err) {
+      this.message(`Could not open ${path}: ${(err as Error).message}`, 'err')
+    }
+  }
+
+  /**
+   * Make a map and save it straight away, so it exists to be warped to and to
+   * be zipped up. It borrows the open map's tileset and its most-used ground
+   * tile: a blank map filled with nothing renders as the void.
+   */
+  private async createMap(id: string, width: number, height: number): Promise<void> {
+    const doc = this.doc
+    const server = this.server
+    if (!doc || !server) return
+    const path = `data/maps/${id}.json`
+    try {
+      const fill = commonest(doc.map.layers.ground)
+      const map = blankMap(id, width, height, doc.map.tileset, fill)
+      const text = serializeMap(map)
+      parseMap(JSON.parse(text), this.host.overworld.currentTileset, path)
+      await server.write(path, text, 'application/json')
+      await this.openMap(path)
+      this.message(`Made ${path}`, 'ok')
+    } catch (err) {
+      this.message(`Could not make the map: ${(err as Error).message}`, 'err')
+    }
+  }
+
+  /** Resize in place, as one undoable action. */
+  private resize(width: number, height: number): void {
+    const doc = this.doc
+    if (!doc) return
+    try {
+      const fill = commonest(doc.map.layers.ground)
+      const touched = doc.replaceMap(
+        `resize to ${width}x${height}`,
+        resizeMap(doc.map, width, height, fill),
+      )
+      if (isNothing(touched)) return
+      // Every grid changed shape, so every mesh and the overlay have to go.
+      // Re-frame afterwards: a map that just grew is mostly off screen.
+      void this.rebuildWorld().then(() => this.fitMap())
+      this.message(`Resized to ${width}×${height}`, 'ok')
+    } catch (err) {
+      this.message(`Could not resize: ${(err as Error).message}`, 'err')
+    }
+  }
+
+  /** Point every pane at a newly loaded document. */
+  private adoptMap(doc: MapDoc, tileset: Tileset): void {
+    this.doc = doc
+    this.overlay?.setMap(doc.map)
+    void this.host.assets.texture(tileset.image).then((sheet) => {
+      this.palette?.setTileset(tileset, sheet.image as CanvasImageSource)
+    })
+    this.mapPicker?.refresh()
+    this.entityEditor?.refresh()
+    this.fitMap()
+    this.syncButtons()
+    if (this.dom) this.dom.dock.querySelector('h4')!.firstChild!.textContent = doc.map.id
+  }
+
   /**
    * Rebuild the scene from the document's map, keeping the same MapDoc so the
    * undo stack survives. Used when a change invalidates the tile meshes
@@ -500,6 +586,8 @@ export class Editor {
       const sheet = await this.host.assets.texture(tileset.image)
       this.palette?.setTileset(tileset, sheet.image as CanvasImageSource)
       this.entityEditor?.refresh()
+      this.mapPicker?.refresh()
+      this.syncButtons()
       this.applyCamera()
     } catch (err) {
       this.message(`Could not rebuild: ${(err as Error).message}`, 'err')
@@ -552,6 +640,7 @@ export class Editor {
       parseMap(JSON.parse(text), this.host.overworld.currentTileset, doc.path)
       await server.write(doc.path, text, 'application/json')
       doc.markSaved()
+      this.mapPicker?.refresh()
       this.message(`Saved ${doc.path}`, 'ok')
     } catch (err) {
       this.message(`Could not save: ${(err as Error).message}`, 'err')
@@ -748,6 +837,7 @@ export class Editor {
     dock.append(tabRow)
 
     const mapPane = el('div', { class: 'ed-pane' })
+    mapPane.append(this.mapPicker!.root)
 
     const tools = new Map<Tool, HTMLButtonElement>()
     const toolRow = el('div', { class: 'ed-seg' })
@@ -816,6 +906,7 @@ export class Editor {
     // The sheet is 512px wide and the dock is 300; fit it rather than making
     // the designer scroll sideways to reach half the palette.
     this.palette!.fitWidth(palWrap.clientWidth - 26)
+    this.mapPicker!.refresh()
     void this.setTab('map')
     this.syncButtons()
     this.updateStatus()
@@ -868,6 +959,16 @@ export class Editor {
       }
     }, MESSAGE_MS)
   }
+}
+
+/** The value that appears most often, for filling new ground with what is there. */
+function commonest(cells: readonly number[]): number {
+  const counts = new Map<number, number>()
+  for (const c of cells) counts.set(c, (counts.get(c) ?? 0) + 1)
+  let best = cells[0] ?? EMPTY_TILE
+  let most = 0
+  for (const [value, n] of counts) if (n > most) { most = n; best = value }
+  return best
 }
 
 /** Load a tileset rider by content path, through whatever source is installed. */

@@ -6,7 +6,7 @@ import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
 import { buildTileLayer } from '../world/tileLayer'
-import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type LayerName, type MapNpc, type MapProp } from '../world/map'
+import { LAYER_NAMES, loadMap, blockedAt, warpAt, type GameMap, type LayerName, type MapNpc, type MapProp, type MapWarp } from '../world/map'
 import { propById, type PropDef, type Tileset } from '../world/tileset'
 import { buildProp, placeProp } from '../world/prop'
 import { Backdrop } from '../world/backdrop'
@@ -66,6 +66,8 @@ export class OverworldMode implements Mode {
   private stepFrames = 0
   private stepsTaken = 0
   private turnGrace = 0
+  /** Set while a map is loading, which suspends the sim. */
+  private traveling = false
 
   constructor(private gfx: Renderer, private input: Input, private assets: Assets) {
     this.sprites.renderOrder = 10
@@ -93,13 +95,36 @@ export class OverworldMode implements Mode {
   get currentMapPath(): string { return this.mapPath }
 
   /**
+   * Follow a warp. Loading is asynchronous, so the sim is held still until the
+   * new map is standing — otherwise a held direction would keep walking the
+   * player across a world that is halfway replaced.
+   */
+  private async travel(warp: MapWarp): Promise<void> {
+    this.traveling = true
+    try {
+      const { map, tileset } = await loadMap(warp.to)
+      this.mapPath = warp.to
+      await this.applyMap(map, tileset, {
+        x: warp.toX, y: warp.toY, facing: warp.facing ?? this.facing,
+      })
+    } catch (err) {
+      // A broken warp must not strand the player in a frozen world.
+      console.error(`[overworld] warp "${warp.id}" to ${warp.to} failed:`, err)
+    } finally {
+      this.traveling = false
+    }
+  }
+
+  /**
    * Build the scene for a map, replacing whatever was there.
    *
    * The player keeps its tile across a rebuild of the same map, so an edit does
    * not walk them back to the start every stroke; a different map, or a tile
    * that the edit put out of bounds, falls back to `playerStart`.
    */
-  async applyMap(map: GameMap, tileset: Tileset): Promise<void> {
+  async applyMap(
+    map: GameMap, tileset: Tileset, arriveAt?: { x: number; y: number; facing: Facing },
+  ): Promise<void> {
     const sameMap = this.map?.id === map.id
     const keepX = this.tx
     const keepY = this.ty
@@ -116,10 +141,14 @@ export class OverworldMode implements Mode {
     // unaffected if the sheet fell back to a placeholder.
     this.rebuildLayers()
 
-    const inMap = sameMap && keepX < map.width && keepY < map.height
-    this.tx = inMap ? keepX : map.playerStart.x
-    this.ty = inMap ? keepY : map.playerStart.y
-    this.facing = inMap ? keepFacing : map.playerStart.facing
+    // A warp names where to arrive; otherwise the player keeps their tile
+    // across a rebuild of the same map, and falls back to playerStart on a
+    // different one — or on one an edit made too small to hold them.
+    const arriving = arriveAt && arriveAt.x < map.width && arriveAt.y < map.height
+    const inMap = !arriveAt && sameMap && keepX < map.width && keepY < map.height
+    this.tx = arriving ? arriveAt.x : inMap ? keepX : map.playerStart.x
+    this.ty = arriving ? arriveAt.y : inMap ? keepY : map.playerStart.y
+    this.facing = arriving ? arriveAt.facing : inMap ? keepFacing : map.playerStart.facing
     this.stepFrom = [this.tx, this.ty]
     this.stepFrames = 0
     this.turnGrace = 0
@@ -308,7 +337,7 @@ export class OverworldMode implements Mode {
   }
 
   update(_dt: number): void {
-    if (!this.player) return
+    if (!this.player || this.traveling) return
 
     if (this.stepFrames === 0 && this.input.pressed('interact') && this.tryInteract()) return
 
@@ -316,7 +345,13 @@ export class OverworldMode implements Mode {
       // Mid-step: run out the tween. Input is buffered by being re-read on
       // arrival, so holding a direction chains steps seamlessly.
       this.stepFrames--
-      if (this.stepFrames === 0) this.stepsTaken++
+      if (this.stepFrames === 0) {
+        this.stepsTaken++
+        // Doc §10: warps fire on arrival, not on leaving, so the step that
+        // steps onto one completes first.
+        const warp = warpAt(this.map, this.tx, this.ty)
+        if (warp) { void this.travel(warp); return }
+      }
     } else {
       const want = this.pressedDir()
       if (!want) {
