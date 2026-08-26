@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { BattleSim, type BattleConfig } from '../src/modes/battle/physics'
-import { OpponentAI, baseTarget, isRepeating, isConfined, angleDelta } from '../src/modes/battle/ai'
+import { OpponentAI, baseTarget } from '../src/modes/battle/ai'
 
 const CFG: BattleConfig = {
   id: 'ai',
@@ -10,172 +10,131 @@ const CFG: BattleConfig = {
   paddle: { radius: 0.22, maxSpeed: 4.5 },
   rules: { mode: 'score', targetScore: 3 },
 }
-const DT = 1 / 60
 
-const strike = (x: number, y: number, angle: number, tick: number) => ({ x, y, angle, tick })
-
-describe('angleDelta', () => {
-  it('measures the short way round', () => {
-    expect(angleDelta(0.1, 0.2)).toBeCloseTo(0.1, 6)
-    expect(angleDelta(-3.0, 3.0)).toBeCloseTo(Math.PI * 2 - 6, 6)
-    expect(angleDelta(0, Math.PI)).toBeCloseTo(Math.PI, 6)
-  })
-})
-
-describe('isConfined', () => {
-  const sim = new BattleSim(CFG)
-  it('is true against a side wall', () => expect(isConfined(sim, 1.8, 1.0)).toBe(true))
-  it('is true against the far end', () => expect(isConfined(sim, 0, 3.2)).toBe(true))
-  it('is false in open play', () => expect(isConfined(sim, 0.2, 1.0)).toBe(false))
-})
-
-describe('isRepeating', () => {
-  it('fires when enough recent strikes cluster near the latest one', () => {
-    const s = [
-      strike(1.7, 2.0, 1.0, 10), strike(1.75, 2.1, 1.2, 40),
-      strike(1.72, 2.15, 0.9, 70), strike(1.78, 2.05, 1.1, 100),
-    ]
-    expect(isRepeating(s, 110)).toBe(true)
-  })
-
-  it('does not fire on strikes spread across the table', () => {
-    const s = [
-      strike(-1.5, 1.0, 1.0, 10), strike(0.4, 2.5, 2.0, 40),
-      strike(1.6, 0.6, -1.0, 70), strike(-0.2, 3.0, 0.4, 100),
-    ]
-    expect(isRepeating(s, 110)).toBe(false)
-  })
-
-  it('does not fire when clustered strikes are spread far apart in time', () => {
-    const s = [
-      strike(1.7, 2.0, 1.0, 10), strike(1.75, 2.1, 1.2, 400),
-      strike(1.72, 2.15, 0.9, 800), strike(1.78, 2.05, 1.1, 1200),
-    ]
-    expect(isRepeating(s, 1210)).toBe(false)
-  })
-
-  it('needs more than a couple of strikes', () => {
-    expect(isRepeating([strike(1.7, 2, 1, 10), strike(1.7, 2, 1, 20)], 30)).toBe(false)
-  })
-
-  it('is false with no history', () => expect(isRepeating([], 100)).toBe(false))
-
-  it('tolerates a stray hit without clearing the alarm', () => {
-    // Density around the newest strike, so one outlier does not reset it.
-    const s = [
-      strike(1.7, 2.0, 1.0, 10), strike(-1.0, 0.2, 2.0, 30),
-      strike(1.75, 2.1, 1.2, 50), strike(1.72, 2.15, 0.9, 70), strike(1.78, 2.05, 1.1, 90),
-    ]
-    expect(isRepeating(s, 100)).toBe(true)
-  })
-})
-
-describe('OpponentAI', () => {
-  it('matches the base behaviour until something repeats', () => {
-    const sim = new BattleSim(CFG)
-    const ai = new OpponentAI()
-    Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
-    expect(ai.update(sim)).toEqual(baseTarget(sim))
-    expect(ai.breakout).toBe('none')
-  })
-
-  it('reset clears a breakout in progress', () => {
-    const sim = new BattleSim(CFG)
-    const ai = new OpponentAI()
-    for (let i = 0; i < 6; i++) {
-      sim.lastOpponentHit = { x: 1.75, y: 2.1, vx: 1, vy: 1 }
-      ai.update(sim)
-    }
-    expect(ai.breakouts).toBeGreaterThan(0)
-    ai.reset()
-    expect(ai.breakout).toBe('none')
-    // `breakouts` is a match-level tally and deliberately survives a faceoff;
-    // only the in-progress state is cleared. step() normally clears the hit
-    // flag, so clear it by hand when driving update() directly.
+/** Drive update() directly, standing in for what step() would report. */
+function strike(ai: OpponentAI, sim: BattleSim, x: number, y: number, gap = 1) {
+  for (let i = 1; i < gap; i++) {
     sim.lastOpponentHit = undefined
+    ai.update(sim)
+  }
+  sim.lastOpponentHit = { x, y, vx: 1, vy: 1 }
+  const t = ai.update(sim)
+  sim.lastOpponentHit = undefined
+  return t
+}
+
+describe('heat', () => {
+  it('starts cold and plays exactly the base behaviour', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
+    expect(ai.heat).toBe(0)
+    expect(ai.update(sim)).toEqual(baseTarget(sim))
+  })
+
+  it('builds when strikes land in the same place in quick succession', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    for (let i = 0; i < 4; i++) strike(ai, sim, 1.75, 2.1, 10)
+    expect(ai.heat).toBeGreaterThan(0)
+    expect(ai.repeats).toBeGreaterThan(0)
+  })
+
+  it('stays cold when strikes are spread across the table', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    const spots: [number, number][] = [[-1.6, 1.0], [0.5, 2.6], [1.7, 0.9], [-0.3, 3.0]]
+    for (const [x, y] of spots) strike(ai, sim, x, y, 10)
+    expect(ai.heat).toBe(0)
+  })
+
+  it('stays cold when strikes are in the same place but far apart in time', () => {
+    // An ordinary rally returns to the same area every few seconds. Only
+    // contact that is close *and* rapid is a grind.
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    for (let i = 0; i < 4; i++) strike(ai, sim, 1.75, 2.1, 200)
+    expect(ai.heat).toBe(0)
+  })
+
+  it('cools back down over clean play', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    for (let i = 0; i < 6; i++) strike(ai, sim, 1.75, 2.1, 10)
+    const hot = ai.heat
+    expect(hot).toBeGreaterThan(0)
+    for (let i = 0; i < 400; i++) ai.update(sim)
+    expect(ai.heat).toBe(0)
+  })
+
+  it('never exceeds full heat however long the grind runs', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    for (let i = 0; i < 60; i++) strike(ai, sim, 1.75, 2.1, 5)
+    expect(ai.heat).toBeLessThanOrEqual(1)
+  })
+
+  it('scatters aim once hot, and more the hotter it gets', () => {
+    const sim = new BattleSim(CFG)
+    Object.assign(sim.puck, { x: 1.75, y: 2.1, vx: 0, vy: 0 })
+
+    const spreadAfter = (grinds: number) => {
+      const ai = new OpponentAI(42)
+      for (let i = 0; i < grinds; i++) strike(ai, sim, 1.75, 2.1, 5)
+      const base = baseTarget(sim)
+      let worst = 0
+      for (let i = 0; i < 40; i++) {
+        const t = ai.update(sim)
+        worst = Math.max(worst, Math.hypot(t.x - base.x, t.y - base.y))
+      }
+      return worst
+    }
+
+    const mild = spreadAfter(3)
+    const cooked = spreadAfter(12)
+    expect(cooked).toBeGreaterThan(mild)
+  })
+
+  it('reset returns it to cold, base behaviour', () => {
+    const sim = new BattleSim(CFG)
+    const ai = new OpponentAI(1)
+    for (let i = 0; i < 8; i++) strike(ai, sim, 1.75, 2.1, 5)
+    expect(ai.heat).toBeGreaterThan(0)
+    ai.reset()
+    expect(ai.heat).toBe(0)
     Object.assign(sim.puck, { x: 0.3, y: 1.2, vx: 0, vy: 0 })
     expect(ai.update(sim)).toEqual(baseTarget(sim))
   })
 
-  it('does not trigger on repeated strikes in open play', () => {
-    // Only a confined puck can be trapped; a rally in the middle is just a rally.
-    const sim = new BattleSim(CFG)
-    const ai = new OpponentAI()
-    for (let i = 0; i < 10; i++) {
-      sim.lastOpponentHit = { x: 0.1, y: 1.5, vx: 1, vy: -1 }
-      ai.update(sim)
+  it('is deterministic for a given seed, so matches replay identically', () => {
+    const run = () => {
+      const sim = new BattleSim(CFG)
+      const ai = new OpponentAI(7)
+      Object.assign(sim.puck, { x: 1.75, y: 2.1, vx: 0, vy: 0 })
+      for (let i = 0; i < 10; i++) strike(ai, sim, 1.75, 2.1, 5)
+      return [ai.update(sim), ai.update(sim), ai.update(sim)]
     }
-    expect(ai.breakouts).toBe(0)
+    expect(run()).toEqual(run())
   })
 
-  it('never targets past the far end wall, where there is no room to get above the puck', () => {
-    const sim = new BattleSim(CFG)
-    const ai = new OpponentAI()
-    // Jam the puck into the far corner and force a breakout.
-    Object.assign(sim.puck, { x: 1.8, y: 3.3, vx: 0, vy: 0 })
-    for (let i = 0; i < 6; i++) {
-      sim.lastOpponentHit = { x: 1.8, y: 3.3, vx: 0.3, vy: 0.1 }
-      ai.update(sim)
+  it('different seeds scatter differently', () => {
+    const run = (seed: number) => {
+      const sim = new BattleSim(CFG)
+      const ai = new OpponentAI(seed)
+      Object.assign(sim.puck, { x: 1.75, y: 2.1, vx: 0, vy: 0 })
+      for (let i = 0; i < 10; i++) strike(ai, sim, 1.75, 2.1, 5)
+      return ai.update(sim)
     }
-    const t = ai.update(sim)
-    // Pressing from the sliver of space above only pins it harder, so the AI
-    // must back off instead.
-    expect(t.y).toBeLessThan(sim.puck.y)
+    expect(run(1)).not.toEqual(run(2))
   })
 })
 
-/**
- * The behaviour that actually matters: a puck worked into a corner must not
- * stay stuck there. Measured as the longest unbroken stretch spent pinned,
- * which is what reads as a trap — total time in the area does not.
- */
-describe('corner grinds', () => {
-  function longestPin(useAI: boolean, start: { x: number; y: number; vx: number; vy: number }): number {
-    const sim = new BattleSim(CFG)
-    const ai = new OpponentAI()
-    Object.assign(sim.puck, start)
-    Object.assign(sim.opponent, { x: start.x, y: start.y + 0.5 })
-    let streak = 0
-    let worst = 0
-    for (let t = 0; t < 1200; t++) {
-      // Stand-in player that returns everything, so the rally sustains and the
-      // AI keeps getting the puck back — the condition a grind needs.
-      sim.step(DT, { x: sim.puck.x, y: -2.6 }, useAI ? ai.update(sim) : baseTarget(sim))
-      if (Math.abs(sim.puck.x) > 1.25 && sim.puck.y > 0.8) {
-        streak++
-        worst = Math.max(worst, streak)
-      } else streak = 0
-    }
-    return worst
-  }
-
-  /** The same grid the recoil was tuned against, so the claim is not cherry-picked. */
-  const STARTS = (() => {
-    const out: { x: number; y: number; vx: number; vy: number }[] = []
-    for (const x of [-1.8, -1.6, -1.3, 1.3, 1.6, 1.8]) {
-      for (const y of [0.9, 1.6, 2.3, 3.0]) {
-        for (const vx of [0.2, -0.6]) out.push({ x, y, vx, vy: 0.3 })
-      }
-    }
-    return out
-  })()
-
-  it('markedly shortens the worst grind across a sweep of start states', () => {
-    // Individual starts can go either way — this is a chaotic sim and the AI
-    // trades a little average aggression for a much better worst case. The
-    // claim worth holding is about the worst case, over the whole sweep.
-    const base = Math.max(...STARTS.map((s) => longestPin(false, s)))
-    const withAi = Math.max(...STARTS.map((s) => longestPin(true, s)))
-    expect(base).toBeGreaterThan(120)          // the base really does trap
-    expect(withAi).toBeLessThan(base * 0.75)   // and the AI cuts it substantially
-  })
-
-  it('keeps the average exchange roughly as it was', () => {
-    const mean = (f: (s: typeof STARTS[number]) => number) =>
-      STARTS.reduce((n, s) => n + f(s), 0) / STARTS.length
-    const base = mean((s) => longestPin(false, s))
-    const withAi = mean((s) => longestPin(true, s))
-    // Breaking out costs a little tempo; it must not cost much.
-    expect(withAi).toBeLessThan(base * 1.15)
+describe('inert opponents', () => {
+  it('stand aside and never heat up', () => {
+    const sim = new BattleSim({ ...CFG, opponent: { name: 'Gravy', ai: 'inert' } })
+    const ai = new OpponentAI(1)
+    const t = ai.update(sim)
+    expect(Math.abs(t.x)).toBeGreaterThan(CFG.table.width * 0.3)
+    expect(ai.heat).toBe(0)
   })
 })

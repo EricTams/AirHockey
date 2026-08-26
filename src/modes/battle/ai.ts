@@ -1,220 +1,131 @@
 import type { BattleSim, Vec } from './physics'
 
 /**
- * Opponent AI (doc §8.4) plus the machinery that stops it grinding.
+ * Opponent AI (doc §8.4), plus a heat mechanic that stops it grinding.
  *
  * The base behaviour is two states — hold a home line, or drive at a reachable
- * puck. On its own that can deadlock: a puck pinned against a side wall gets
- * struck, rebounds off the wall, and returns to almost the same spot, so the AI
- * makes the same play forever. The doc's stuck-puck rule cannot catch it,
- * because the puck never stops moving.
+ * puck. On its own that can deadlock: a puck pinned against a wall gets struck,
+ * rebounds, and comes back to almost the same spot, so the AI makes the same
+ * play forever. Doc §8.3's stuck-puck rule cannot catch it, because the puck
+ * never stops moving.
  *
- * So the AI watches its own strikes. When several land in the same place and
- * send the puck out at the same angle, it concludes it is repeating itself and
- * hands control to a breakout for a while. Breakouts escalate: if one does not
- * break the pattern, the next is more drastic.
+ * So the AI notices when it keeps striking the puck in nearly the same place
+ * and builds *heat*. Heat scatters where it aims, by an amount proportional to
+ * how hot it is, and bleeds away once play moves on. A grind therefore breaks
+ * itself: the longer one runs the less precisely the AI plays, until something
+ * knocks the pattern loose and the heat cools off.
+ *
+ * A scalar that feeds back into aim beats a ladder of scripted escape moves.
+ * There is no geometry to special-case, no escalation to sequence, and no state
+ * machine to get stuck in — and a little scatter reads as an opponent losing
+ * patience rather than a bug.
  */
 
-/** Strikes retained for analysis. */
-const HISTORY = 12
-/** Strikes inside the window before a pattern counts as a grind. */
-const MATCH_COUNT = 4
+/** Strikes within this distance of the last one count as the same place. */
+const SAME_PLACE = 0.45
 /**
- * How far strikes may spread from their centre and still count as the same
- * place. Deliberately loose: a real grind is not the identical shot repeated,
- * it is many strikes around the same spot, each slightly different. Tight
- * tolerances missed the worst grinds entirely.
+ * And they must land within this many ticks of each other. Proximity alone is
+ * not enough: in an ordinary rally the AI naturally strikes around the same
+ * area, just seconds apart. What marks a grind is contact that is both close
+ * *and* rapid. Without this the AI ran hot permanently and played worse.
  */
-const CLUSTER_RADIUS = 0.95
-/** Strikes must fall inside this many ticks to count as a grind. */
-const WINDOW_TICKS = 300
-/** How long a breakout keeps control once triggered. */
-const BREAKOUT_TICKS = 90
-/** A puck this far from the grind spot counts as freed, ending the breakout. */
-const ESCAPED_DIST = 1.4
+const SAME_BEAT_TICKS = 50
+/**
+ * Heat added per repeat. Deliberately small — around seven rapid repeats in the
+ * same spot to reach full heat — so ordinary exchanges never scatter the AI.
+ */
+const HEAT_PER_REPEAT = 0.15
+/** Heat shed per tick, so full heat cools in about four seconds of clean play. */
+const COOL_PER_TICK = 0.004
+/** How far aim scatters, in world units, at full heat. */
+const MAX_SCATTER = 0.85
 /** A puck this close to a side wall is treated as cornered. */
 const WALL_ZONE = 0.7
-/**
- * Ticks the AI eases off after connecting. Without it the paddle re-presses
- * instantly, which is what lets a puck get pinned against a wall and struck
- * over and over. A real player recoils; this is the same idea, and it prevents
- * most grinds from forming rather than detecting them afterwards.
- *
- * Tuned by sweeping 48 start states, not by eye: anything from ~14 to ~28 is a
- * flat optimum, while a shorter recoil is measurably worse than none at all.
- * 20 sits in the middle of that plateau rather than at its exact minimum, which
- * would just be overfitting to the sample.
- */
-const RECOIL_TICKS = 20
 
-interface Strike { x: number; y: number; angle: number; tick: number }
-
-/** True when the puck is pressed against a wall and has nowhere easy to go. */
-export function isConfined(sim: BattleSim, x: number, y: number): boolean {
-  const { width, length } = sim.cfg.table
-  const nearSide = width / 2 - Math.abs(x) < WALL_ZONE
-  const nearEnd = length / 2 - y < WALL_ZONE
-  return nearSide || nearEnd
+/** Small deterministic PRNG, so a match replays identically and tests are stable. */
+function makeRng(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
 }
 
-/** Smallest absolute difference between two angles, accounting for wrap. */
-export function angleDelta(a: number, b: number): number {
-  let d = Math.abs(a - b) % (Math.PI * 2)
-  if (d > Math.PI) d = Math.PI * 2 - d
-  return d
+export interface HeatTuning {
+  samePlace: number
+  sameBeatTicks: number
+  heatPerRepeat: number
+  coolPerTick: number
+  maxScatter: number
+  /** Exponent on heat before it scatters aim. >1 keeps mild heat harmless. */
+  curve: number
 }
 
-/**
- * True when the AI keeps striking the puck in the same area: count how many
- * recent strikes landed near the newest one, and call it a grind past a
- * threshold.
- *
- * Density around the latest strike, not agreement across all of them. Requiring
- * every strike in the window to fall inside one cluster is *stricter* the more
- * history you keep — a single stray hit clears the alarm — and that version
- * missed the worst grinds entirely.
- */
-export function isRepeating(strikes: Strike[], now: number): boolean {
-  const recent = strikes.filter((s) => now - s.tick <= WINDOW_TICKS)
-  const anchor = recent[recent.length - 1]
-  if (!anchor) return false
-  const near = recent.filter((s) => Math.hypot(s.x - anchor.x, s.y - anchor.y) <= CLUSTER_RADIUS)
-  return near.length >= MATCH_COUNT
+export const DEFAULT_HEAT: HeatTuning = {
+  samePlace: SAME_PLACE,
+  sameBeatTicks: SAME_BEAT_TICKS,
+  heatPerRepeat: HEAT_PER_REPEAT,
+  coolPerTick: COOL_PER_TICK,
+  maxScatter: MAX_SCATTER,
+  // Quadratic: mild heat is nearly harmless, only a real grind makes the AI
+  // visibly wild. Chosen with the mean rally length held at baseline.
+  curve: 2,
 }
-
-export type BreakoutKind = 'none' | 'withdraw' | 'offAngle' | 'clearOut'
 
 export class OpponentAI {
-  private strikes: Strike[] = []
+  /** 0 when composed, 1 when thoroughly stuck. Drives how much aim scatters. */
+  heat = 0
+  /** Strikes that landed in the same place as the one before, this match. */
+  repeats = 0
+
+  private lastStrike?: Vec & { tick: number }
   private tick = 0
-  private breakoutLeft = 0
-  private level = 0
-  private recoilLeft = 0
-  /** Where the grind was happening, so a breakout can end as soon as it works. */
-  private grindAt?: Vec
+  private rng: () => number
 
-  /** What the AI is currently doing, for the debug overlay and tests. */
-  breakout: BreakoutKind = 'none'
-  /** How many times a repetition has been detected this match. */
-  breakouts = 0
+  private t: HeatTuning
 
-  /** Clear all state. Called on every faceoff, since the situation is new. */
-  reset(): void {
-    this.strikes.length = 0
-    this.breakoutLeft = 0
-    this.breakout = 'none'
-    this.level = 0
-    this.recoilLeft = 0
+  constructor(seed = 0x9e3779b9, tuning: Partial<HeatTuning> = {}) {
+    this.rng = makeRng(seed)
+    this.t = { ...DEFAULT_HEAT, ...tuning }
   }
+
+  /** Clear per-rally state. Called on every faceoff, since the situation is new. */
+  reset(): void {
+    this.heat = 0
+    this.lastStrike = undefined
+  }
+
 
   /** Advance one tick and return where the opponent's paddle should go. */
   update(sim: BattleSim): Vec {
     this.tick++
+    this.heat = Math.max(0, this.heat - this.t.coolPerTick)
 
     const hit = sim.lastOpponentHit
     if (hit) {
-      this.recoilLeft = RECOIL_TICKS
-      // Only strikes on a confined puck count toward a grind. Repeated hits in
-      // open play are just a rally; it is only a trap when the puck has a wall
-      // behind it and nowhere to go. Counting every strike made the AI abandon
-      // ordinary exchanges for no reason.
-      if (isConfined(sim, hit.x, hit.y)) {
-        this.strikes.push({ x: hit.x, y: hit.y, angle: Math.atan2(hit.vy, hit.vx), tick: this.tick })
-        if (this.strikes.length > HISTORY) this.strikes.shift()
+      const last = this.lastStrike
+      const samePlace = last && Math.hypot(hit.x - last.x, hit.y - last.y) < this.t.samePlace
+      const sameBeat = last && this.tick - last.tick <= this.t.sameBeatTicks
+      if (samePlace && sameBeat) {
+        this.heat = Math.min(1, this.heat + this.t.heatPerRepeat)
+        this.repeats++
       }
-
-      if (this.breakoutLeft <= 0 && isRepeating(this.strikes, this.tick)) {
-        this.breakouts++
-        this.level++
-        this.breakoutLeft = BREAKOUT_TICKS
-        this.breakout = this.chooseBreakout(sim)
-        this.grindAt = { x: hit.x, y: hit.y }
-        // Drop the history, or the same strikes immediately re-trigger.
-        this.strikes.length = 0
-      }
+      this.lastStrike = { x: hit.x, y: hit.y, tick: this.tick }
     }
 
-    if (this.breakoutLeft > 0) {
-      this.breakoutLeft--
-      // End the moment it works rather than burning the whole timer: once the
-      // puck is well clear of where the grind was, normal play resumes.
-      const clear = this.grindAt
-        ? Math.hypot(sim.puck.x - this.grindAt.x, sim.puck.y - this.grindAt.y) > ESCAPED_DIST
-        : false
-      if (this.breakoutLeft === 0 || clear) {
-        this.breakoutLeft = 0
-        this.breakout = 'none'
-        this.grindAt = undefined
-      } else {
-        return this.breakoutTarget(sim)
-      }
-    }
+    const target = baseTarget(sim)
+    if (this.heat <= 0) return target
 
-    if (this.recoilLeft > 0) {
-      this.recoilLeft--
-      // Ease back off the line of the puck without abandoning position.
-      const base = baseTarget(sim)
-      const home = (sim.cfg.table.length / 2) * (sim.cfg.opponent.roamDepth ?? 0.45)
-      return { x: base.x, y: Math.max(base.y, (base.y + home) / 2) }
-    }
-
-    return baseTarget(sim)
-  }
-
-  /**
-   * Pick a breakout for the situation rather than cycling blindly.
-   *
-   * Driving the puck down-table needs room above it. Jammed into the far
-   * corner against its own end wall there is none, and pressing from what
-   * little there is only pins the puck harder — that case has to disengage.
-   */
-  private chooseBreakout(sim: BattleSim): BreakoutKind {
-    const maxY = sim.cfg.table.length / 2 - sim.cfg.paddle.radius
-    const r = sim.cfg.paddle.radius + sim.cfg.puck.radius
-    if (maxY - sim.puck.y < r * 1.1) return 'withdraw'
-    // Alternate the two striking breakouts, so a repeat grind is met with a
-    // different line rather than the same one that just failed.
-    return this.level % 2 === 1 ? 'clearOut' : 'offAngle'
-  }
-
-  /**
-   * Where to go while breaking a grind.
-   *
-   * A puck flush against a side wall cannot be pushed inward: the paddle is
-   * wider than the gap, so its centre can never get outside the puck's x. The
-   * only escape the geometry allows is to get *above* the puck and drive it
-   * down-table, out of this half and back into play. Both striking breakouts
-   * do that; they differ in how much sideways they add.
-   */
-  private breakoutTarget(sim: BattleSim): Vec {
-    const { length } = sim.cfg.table
-    const home = (length / 2) * (sim.cfg.opponent.roamDepth ?? 0.45)
-    const puck = sim.puck
-    const r = sim.cfg.paddle.radius + sim.cfg.puck.radius
-    const inward = puck.x > 0 ? -1 : 1
-
-    // Re-checked every tick, not just when the breakout was chosen: the puck
-    // drifts while a breakout runs, and once it is jammed against the far end
-    // there is no longer room to get above it. Pressing on from there pins it
-    // harder than doing nothing.
-    const maxY = length / 2 - sim.cfg.paddle.radius
-    const kind: BreakoutKind = maxY - puck.y < r * 1.1 ? 'withdraw' : this.breakout
-
-    switch (kind) {
-      case 'clearOut':
-        // Directly above the puck: drive it straight down-table.
-        return { x: puck.x, y: puck.y + r }
-
-      case 'offAngle':
-        // Above and a little to the inside, so it leaves on a different line
-        // than the one that keeps coming back.
-        return { x: puck.x - inward * r * 0.8, y: puck.y + r * 0.9 }
-
-      case 'withdraw':
-      default:
-        // Last resort: stop pressing entirely and let the puck's own momentum
-        // carry it out rather than pinning it in place.
-        return { x: puck.x * 0.3, y: Math.max(home, length * 0.4) }
+    // Scatter grows with heat. Clamping to the paddle's own half happens in the
+    // sim, so an aim that strays off-table simply presses at the boundary.
+    // Curved, so a touch of heat barely shifts aim and only a real grind makes
+    // the AI visibly wild.
+    const spread = Math.pow(this.heat, this.t.curve) * this.t.maxScatter
+    return {
+      x: target.x + (this.rng() * 2 - 1) * spread,
+      y: target.y + (this.rng() * 2 - 1) * spread,
     }
   }
 }

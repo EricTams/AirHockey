@@ -59,6 +59,8 @@ export class BattleMode implements Mode {
 
   private sim!: BattleSim
   private ai = new OpponentAI()
+  /** Debug harness: drive the player paddle with a bot so rallies sustain. */
+  private autoPlay = false
   private phase: Phase = 'countdown'
   private timer = 0
   private stuck = 0
@@ -375,8 +377,33 @@ export class BattleMode implements Mode {
     return { x: sceneX(hit.x), y: hit.z }
   }
 
+  /**
+   * Debug harness. `T` throws the puck into a corner of the AI's half at low
+   * speed — the state a grind starts from — and `Y` hands the player's paddle
+   * to a bot that returns everything, so a rally sustains and the AI can be
+   * watched working itself into and out of trouble without anyone playing.
+   */
+  private debugKeys(): void {
+    if (this.input.pressed('debugTrap')) {
+      const { width, length } = this.sim.cfg.table
+      const side = this.sim.puck.x >= 0 ? -1 : 1     // alternate corners
+      Object.assign(this.sim.puck, {
+        x: side * (width / 2 - this.sim.cfg.puck.radius - 0.02),
+        y: length * 0.33,
+        vx: side * 0.4,
+        vy: 0.3,
+      })
+      if (this.phase === 'ready') { this.phase = 'play'; this.timer = 0 }
+    }
+    if (this.input.pressed('debugAutoPlay')) this.autoPlay = !this.autoPlay
+  }
+
   /** Player paddle target, from the pointer when it is in use, else the keys. */
   private playerTarget(): { x: number; y: number } {
+    if (this.autoPlay) {
+      // Track the puck's x at a fixed depth: enough to keep the rally alive.
+      return { x: this.sim.puck.x, y: -this.sim.cfg.table.length * 0.37 }
+    }
     if (this.input.source === 'pointer') {
       const at = this.pointerOnTable()
       if (at) return at
@@ -405,6 +432,7 @@ export class BattleMode implements Mode {
 
   update(dt: number): void {
     if (!this.sim) return
+    this.debugKeys()
 
     if (this.phase === 'ready') {
       if (this.timer > 0) this.timer--
@@ -461,6 +489,14 @@ export class BattleMode implements Mode {
         this.onSwitch?.(this.returnTo)
         return
       }
+    }
+
+    // Opponent paddle glows toward red as it heats up, so the mechanic is
+    // visible in play rather than only in the overlay.
+    if (this.opponentMesh && this.phase !== 'ready') {
+      const mat = this.opponentMesh.material as THREE.MeshLambertMaterial
+      const h = this.ai.heat
+      mat.color.setRGB(0.816 + h * 0.184, 0.498 - h * 0.25, 0.541 - h * 0.35)
     }
 
     if (this.puckMesh) this.puckMesh.position.set(sceneX(this.sim.puck.x), this.puckMesh.position.y, this.sim.puck.y)
@@ -555,6 +591,17 @@ export class BattleMode implements Mode {
     }
 
     this.screen.set(o)
+  }
+
+  /** Live AI state, surfaced in the debug overlay. */
+  get status(): Record<string, string | number> {
+    return {
+      phase: this.phase,
+      heat: this.ai.heat.toFixed(2),
+      repeats: this.ai.repeats,
+      autoPlay: this.autoPlay ? 'on (Y)' : 'off (Y)',
+      puck: `${this.sim?.puck.x.toFixed(1)},${this.sim?.puck.y.toFixed(1)}`,
+    }
   }
 
   render(): void {

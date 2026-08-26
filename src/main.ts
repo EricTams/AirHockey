@@ -9,6 +9,8 @@ import { OverworldMode } from './modes/overworld'
 import { DialogueMode } from './modes/dialogue'
 import { BattleMode } from './modes/battle/battle'
 import { VIRTUAL_W, VIRTUAL_H } from './core/config'
+import { fetchJson } from './core/paths'
+import type { BattleConfig } from './modes/battle/physics'
 
 const gfx = new Renderer()
 const input = new Input()
@@ -57,10 +59,11 @@ const loop = new Loop(
       ticks: loop.ticksLastFrame,
       scale: `${gfx.integerScale}x  ${VIRTUAL_W}x${VIRTUAL_H}`,
       ...(modes.activeName === 'overworld' ? overworld.status : {}),
+      ...(modes.activeName === 'battle' ? battle.status : {}),
       stubbed: assets.placeholders.length,
       geometries: gfx.gl.info.memory.geometries,
       textures: gfx.gl.info.memory.textures,
-      keys: 'WASD  Z talk  M mode  [ ] pitch  F1',
+      keys: 'WASD/mouse  Z  M mode  T trap  Y autoplay  F1',
     })
   },
 )
@@ -73,5 +76,13 @@ console.log('[airhockey] booted', {
 })
 
 if (import.meta.env.DEV) {
-  ;(window as unknown as Record<string, unknown>).__game = { gfx, input, modes, loop, debug, assets, overworld, dialogue, battle }
+  ;(window as unknown as Record<string, unknown>).__game = {
+    gfx, input, modes, loop, debug, assets, overworld, dialogue, battle,
+    /** Jump straight into any arena, skipping the walk and the dialogue. */
+    async startBattle(id = 'blorb') {
+      const config = await fetchJson<BattleConfig>(`data/battles/${id}.json`)
+      modes.switchTo('battle', { config, returnTo: 'overworld' })
+      return id
+    },
+  }
 }
