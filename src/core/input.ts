@@ -15,6 +15,22 @@ const BINDINGS: Record<string, Button> = {
 }
 
 /**
+ * True while a text field or contenteditable holds focus.
+ *
+ * Movement is bound to WASD and preventDefault'd, so without this any text
+ * field the editor puts on screen — a dialogue line, a prop name — would eat
+ * every a, s, d and w the designer typed, and walk the player besides.
+ */
+function isTyping(): boolean {
+  // Input is otherwise DOM-free and unit-tested against a bare EventTarget.
+  if (typeof document === 'undefined') return false
+  const el = document.activeElement as HTMLElement | null
+  if (!el) return false
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+}
+
+/**
  * Polls keyboard into a per-tick snapshot (doc §5). `held` is current state;
  * `pressed` is the rising edge since the previous tick.
  */
@@ -23,6 +39,18 @@ export type InputSource = 'keyboard' | 'pointer'
 export class Input {
   private down = new Set<Button>()
   private prev = new Set<Button>()
+
+  /**
+   * Forget everything currently held. Used when the game resumes from the
+   * editor, so a key held while the editor had focus does not arrive as a
+   * step the moment play starts again.
+   */
+  reset(): void {
+    this.down.clear()
+    this.prev.clear()
+    this.pointerIsDown = false
+    this.pointerWasDown = false
+  }
 
   /** Latest pointer position in client coordinates, or undefined if never seen. */
   pointer?: { x: number; y: number }
@@ -34,14 +62,14 @@ export class Input {
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
       const b = BINDINGS[(e as KeyboardEvent).code]
-      if (!b) return
+      if (!b || isTyping()) return
       e.preventDefault()
       this.source = 'keyboard'
       this.down.add(b)
     })
     target.addEventListener('keyup', (e) => {
       const b = BINDINGS[(e as KeyboardEvent).code]
-      if (!b) return
+      if (!b || isTyping()) return
       e.preventDefault()
       this.down.delete(b)
     })

@@ -8,6 +8,7 @@ import { GalleryMode } from './modes/gallery'
 import { OverworldMode } from './modes/overworld'
 import { DialogueMode } from './modes/dialogue'
 import { BattleMode } from './modes/battle/battle'
+import { mountEditorUi } from './editor/ui'
 import { VIRTUAL_W, VIRTUAL_H, TICK_DT } from './core/config'
 import { fetchJson } from './core/paths'
 import type { BattleConfig } from './modes/battle/physics'
@@ -76,6 +77,34 @@ const loop = new Loop(
 )
 loop.start()
 
+/**
+ * The editor ships in the production build: pressing Edit on the published site
+ * walks you through standing up a local server (src/editor/ui.ts).
+ *
+ * Editing suspends the game rather than overlaying a running one. The loop
+ * keeps presenting frames — the editor needs a picture to draw on — but no
+ * logic ticks run, so nothing walks, animates, or reads input behind the
+ * editor's back.
+ */
+const editor = mountEditorUi({
+  onEnter(server) {
+    // Editing acts on the overworld, so settle any pending mode change with a
+    // single tick before the sim stops.
+    if (modes.activeName !== 'overworld') {
+      modes.switchTo('overworld')
+      tick(TICK_DT)
+    }
+    loop.setPaused(true)
+    input.reset()
+    console.log('[editor] editing against', server.origin, '- game paused')
+  },
+  onExit() {
+    input.reset()   // drop anything held while the editor had focus
+    loop.setPaused(false)
+    console.log('[editor] resumed')
+  },
+})
+
 console.log('[airhockey] booted', {
   virtual: `${VIRTUAL_W}x${VIRTUAL_H}`,
   modes: modes.names,
@@ -84,7 +113,7 @@ console.log('[airhockey] booted', {
 
 if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__game = {
-    gfx, input, modes, loop, debug, assets, overworld, dialogue, battle,
+    gfx, input, modes, loop, debug, assets, overworld, dialogue, battle, editor,
     /** Jump straight into any arena, skipping the walk and the dialogue. */
     async startBattle(id = 'blorb') {
       const config = await fetchJson<BattleConfig>(`data/battles/${id}.json`)

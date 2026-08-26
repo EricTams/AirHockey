@@ -1,0 +1,7 @@
+{
+  "id": "terrain",
+  "image": "assets/terrain/tileset-tiles.png",
+  "tilePx": 48,
+  "size": [512, 464],
+  "reviewed": false
+}

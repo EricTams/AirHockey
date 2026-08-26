@@ -23,6 +23,10 @@ coverage/
 .DS_Store
 Thumbs.db
 
+# The editor helper's content folder, when it is run from the project root.
+# Designers' edits live here before they are folded into public/.
+airhockey-content/
+
 # Scratch
 *.bak
 *.local

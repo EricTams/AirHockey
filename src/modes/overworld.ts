@@ -5,9 +5,9 @@ import type { Input } from '../core/input'
 import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
-import { buildGroundMesh } from '../world/groundMesh'
+import { buildTileLayer } from '../world/tileLayer'
+import { LAYER_NAMES, loadMap, blockedAt, type GameMap, type MapNpc } from '../world/map'
 import { Backdrop } from '../world/backdrop'
-import { TILE } from '../core/config'
 import { fetchJson } from '../core/paths'
 import type { DialogueScript } from './dialogue'
 import type { BattleConfig } from './battle/physics'
@@ -17,27 +17,22 @@ const STEP_FRAMES = 12
 /** Frames a direction must be held facing before the step commits. */
 const TURN_GRACE = 4
 
-const MAP_COLS = 20
-const MAP_ROWS = 12
-/** Pure-grass fill cell in the tileset (cols 4-6 × rows 1-3 are all identical). */
-const GRASS_CELL = { col: 4, row: 1 }
-/** Solid dirt from the cliff face, used only to make the tile grid legible. */
-const DIRT_CELL = { col: 5, row: 6 }
-
-/** Three opponents, each with its own arena layout. */
-const NPCS: {
-  id: string; tile: [number, number]; dialogue: string; battle: string; tint: number
-}[] = [
-  { id: 'blorb',   tile: [6, 4],  tint: 0xffffff,
-    dialogue: 'data/dialogue/blorb.json',   battle: 'data/battles/blorb.json' },
-  { id: 'wing',    tile: [10, 4], tint: 0xffb27a,
-    dialogue: 'data/dialogue/wing.json',    battle: 'data/battles/wing.json' },
-  { id: 'plumber', tile: [14, 4], tint: 0x8fe6a4,
-    dialogue: 'data/dialogue/plumber.json', battle: 'data/battles/plumber.json' },
-]
+/** The map the game boots into (doc §10: "the entry map"). */
+const ENTRY_MAP = 'data/maps/overworld.json'
+/** The player's own sprite is a game constant, not map data. */
+const PLAYER_CHARACTER = 'data/characters/character-1.json'
 
 const DIRS: Record<Facing, [number, number]> = {
   up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+}
+
+interface NpcSlot {
+  def: MapNpc
+  tile: [number, number]
+  sprite?: CharacterSprite
+  facing: Facing
+  script?: DialogueScript
+  battle?: BattleConfig
 }
 
 export class OverworldMode implements Mode {
@@ -48,19 +43,14 @@ export class OverworldMode implements Mode {
   private sprites = new THREE.Group()
   private player?: CharacterSprite
 
-  // Player state
-  private npcs: {
-    tile: [number, number]
-    sprite?: CharacterSprite
-    facing: Facing
-    script?: DialogueScript
-    battle?: BattleConfig
-  }[] = NPCS.map((n) => ({ tile: n.tile, facing: 'down' }))
+  private map!: GameMap
+  private layers: THREE.Mesh[] = []
+  private npcs: NpcSlot[] = []
 
-  private tx = 10
-  private ty = 7
+  private tx = 0
+  private ty = 0
   private facing: Facing = 'down'
-  private stepFrom: [number, number] = [10, 7]
+  private stepFrom: [number, number] = [0, 0]
   private stepFrames = 0
   private stepsTaken = 0
   private turnGrace = 0
@@ -71,33 +61,38 @@ export class OverworldMode implements Mode {
   }
 
   async init(): Promise<void> {
-    const sheet = await this.assets.texture('assets/terrain/tileset-tiles.png', {
-      label: 'TILESET', kind: 'tile', width: 512, height: 464,
-    })
-    const img = sheet.image as { width?: number; height?: number } | undefined
-    // M1 scaffolding: a checker of two real cells so the tile grid is visible.
-    // Without a depth cue on the ground, a pitch change is invisible — every
-    // billboard is the same on-screen size at any pitch. M3 replaces this with
-    // the real tile layers.
-    this.scene.add(buildGroundMesh(
-      sheet, MAP_COLS, MAP_ROWS,
-      (tx, ty) => ((tx + ty) % 2 === 0 ? GRASS_CELL : DIRT_CELL),
-      TILE, img?.width ?? 512, img?.height ?? 464))
+    const { map, tileset } = await loadMap(ENTRY_MAP)
+    this.map = map
 
-    const def = await fetchJson<CharacterDef>('data/characters/character-1.json')
+    const sheet = await this.assets.texture(tileset.image, {
+      label: 'TILESET', kind: 'tile', width: tileset.sheetW, height: tileset.sheetH,
+    })
+    // One merged mesh per layer. Indices come from the file, so the grid is
+    // unaffected if the sheet fell back to a placeholder.
+    for (const name of LAYER_NAMES) {
+      const mesh = buildTileLayer(sheet, map, name, tileset)
+      this.layers.push(mesh)
+      this.scene.add(mesh)
+    }
+
+    this.tx = map.playerStart.x
+    this.ty = map.playerStart.y
+    this.stepFrom = [this.tx, this.ty]
+    this.facing = map.playerStart.facing
+
+    const def = await fetchJson<CharacterDef>(PLAYER_CHARACTER)
     this.player = await CharacterSprite.load(def, this.assets)
     this.sprites.add(this.player.mesh)
 
-    const npcDef = await fetchJson<CharacterDef>('data/characters/character-2.json')
-    await Promise.all(NPCS.map(async (spec, i) => {
-      const slot = this.npcs[i]!
-      // All three share Character 2's sheet; it is the only NPC art in the drop.
+    this.npcs = map.npcs.map((n) => ({ def: n, tile: [n.x, n.y], facing: n.facing }))
+    await Promise.all(this.npcs.map(async (slot) => {
+      const npcDef = await fetchJson<CharacterDef>(slot.def.character)
       slot.sprite = await CharacterSprite.load(npcDef, this.assets)
-      slot.sprite.setTint(spec.tint)
+      if (slot.def.tint !== undefined) slot.sprite.setTint(slot.def.tint)
       slot.sprite.setFrame(slot.facing, 0)
       this.sprites.add(slot.sprite.mesh)
-      slot.script = await fetchJson<DialogueScript>(spec.dialogue)
-      slot.battle = await fetchJson<BattleConfig>(spec.battle)
+      if (slot.def.dialogue) slot.script = await fetchJson<DialogueScript>(slot.def.dialogue)
+      if (slot.def.battle) slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
     }))
   }
 
@@ -105,8 +100,9 @@ export class OverworldMode implements Mode {
   exit(): void {}
 
   private blocked(tx: number, ty: number): boolean {
-    if (tx < 0 || ty < 0 || tx >= MAP_COLS || ty >= MAP_ROWS) return true
-    // NPCs occupy their tile for collision (doc §6.2).
+    // Terrain passability is its own grid (doc §6.1); NPCs occupy their tile
+    // on top of it (doc §6.2).
+    if (blockedAt(this.map, tx, ty)) return true
     return this.npcs.some((n) => n.tile[0] === tx && n.tile[1] === ty)
   }
 
@@ -211,6 +207,7 @@ export class OverworldMode implements Mode {
   /** Debug readout for the overlay. */
   get status(): Record<string, string | number> {
     return {
+      map: `${this.map?.id ?? '<none>'} ${this.map?.width ?? 0}x${this.map?.height ?? 0}`,
       tile: `${this.tx},${this.ty}`,
       facing: this.facing,
       steps: this.stepsTaken,
