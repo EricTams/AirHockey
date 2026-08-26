@@ -4,8 +4,13 @@
 once the editor is finished; it is not part of the design record. The permanent
 spec is `mechanical-design-v1.md`.
 
-Last updated after the editor shell landed: tile painting, collision, undo,
-save, and the zip that carries the designer's work back.
+**All seven stages are built.** What is left is the thing this document has
+always said comes next: hand it to a designer and get feedback.
+
+Before deleting this file, move the durable parts into the permanent record —
+section 3 (decisions) and section 4 (invariants) are the ones worth keeping, and
+`Docs/events.md` already holds the event format. Section 7's traps are the other
+thing worth keeping: each of them cost real time and none is obvious.
 
 ---
 
@@ -57,6 +62,11 @@ loads `public/data/maps/overworld.json`.
 | `src/editor/sheetAnalysis.ts` | Coverage measurement and prop clustering |
 | `src/editor/tilesetFile.ts` | Diffable rider serialisation |
 | `src/editor/mapPicker.ts` | Map list, new map, resize |
+| `src/world/event.ts` | Event types and validation |
+| `src/world/eventRunner.ts` | The interpreter |
+| `src/world/gameState.ts` | Flags and variables |
+| `src/editor/eventEditor.ts` | Pages, conditions, command list, state panel |
+| `src/editor/commandList.ts` | The command tree, addressed by path |
 
 **The helper works.** One dependency-free file the designer downloads from the
 published site. Creates `airhockey-content/`, writes only there, no clone and no
@@ -101,6 +111,12 @@ On the shipped sheet the importer proposes exactly the failure decision 5
 predicted: one 9x9 prop swallowing everything. That is the review screen earning
 its place, not a bug to tune out.
 
+**Events work.** Pages with conditions, four triggers, flags and variables, an
+interpreter that suspends and resumes across ticks, and a command-list editor
+with the tree flattened into an indented list. Battles report who won, so
+`won:`/`lost:` branches have something to branch on. An NPC can be turned into
+the event that does the same thing in one click. Format: `Docs/events.md`.
+
 **Multiple maps work.** A map picker with create and resize, and warps as a
 placeable entity kind. `warps` is in the format and validated; the overworld
 follows one on arrival, holding the sim still while the destination loads.
@@ -110,7 +126,16 @@ The dock has tabs (Map, Entities, Dialogue, Sheet) — that is where events go.
 
 ### Not started
 
-Events. That is section 5.5, and it is the whole of what remains.
+Nothing in section 5. What remains is not a stage:
+
+- **Designer feedback.** The working method was always "build our best guess,
+  hand it to a designer, get feedback". That has not happened yet, and it is now
+  the only thing that will meaningfully improve this.
+- **Saving.** Flags and variables live for a session (doc §1 puts save/load out
+  of v1 scope). The event system is the thing that makes saving worth having,
+  and `GameState` is the shape it would attach to.
+- **Chunked layer meshes.** Rebuilding a whole layer per stroke is O(cells) and
+  fine at 20x12. It will not be fine at 200x200.
 
 ---
 
@@ -191,7 +216,7 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 ## 5. What to build next
 
 **Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → ~~5.4 dialogue~~ → ~~5.3 entities~~
-→ ~~5.2 import~~ → ~~5.6 multiple maps~~ → 5.5 events. Dialogue is cheap and gets the
+→ ~~5.2 import~~ → ~~5.6 multiple maps~~ → ~~5.5 events~~. Dialogue is cheap and gets the
 designer something to react to a stage sooner. Events last, per decision 10.
 
 ### 5.0 Content routing — DONE
@@ -275,7 +300,7 @@ list with reordering, plus live preview through the real `DialogueMode`
 renderer. The cheapest stage; consider doing it before 5.3 to get the designer
 something to react to sooner.
 
-### 5.5 Events and triggers
+### 5.5 Events and triggers — DONE
 
 Nothing exists. Eric chose the **full** model: event pages with per-page
 conditions, flags and variables, conditional branches, loops, waits.

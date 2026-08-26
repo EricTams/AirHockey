@@ -76,6 +76,26 @@ export const EDITOR_CSS = `
   border: 1px solid #222c3a; touch-action: none; }
 .ed-propline { grid-template-columns: 1fr 34px 16px 24px; align-items: center; }
 .ed-propline .ed-input2 { padding: 3px 6px; }
+/* Never shrink, for the same reason as the line list: squeezed to fit inside a
+   scrolling pane it collapses to a couple of rows. The pane scrolls instead. */
+.ed-cmds { flex: none; max-height: 300px; overflow: auto; background: #0e131c;
+  border-top: 1px solid #1c2431; border-bottom: 1px solid #1c2431; padding: 4px 0; }
+.ed-cmd-row { display: flex; gap: 4px; align-items: center; padding: 3px 8px 3px 0;
+  font-size: 11px; color: #c2d1e2; cursor: pointer; border-left: 2px solid transparent; }
+.ed-cmd-row:hover { background: #161e2b; }
+.ed-cmd-row[aria-selected="true"] { background: #22314a; border-left-color: #4a7bb5; }
+.ed-cmd-row.ed-cmd-bad { color: #f0c489; }
+.ed-cmd-row.ed-cmd-bad::after { content: "!"; color: #e0a04a; font-weight: 700;
+  margin-left: 2px; }
+.ed-cmd-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.ed-cmd-head { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+  color: #6d8098; padding: 4px 0 2px; }
+.ed-cmd-add { padding: 3px 8px 3px 0; }
+.ed-add { width: 100%; font-size: 10px; color: #7f8fa5; }
+.ed-tiny { padding: 1px 5px; font-size: 10px; line-height: 1.4; }
+.ed-op { flex: 0 1 90px; min-width: 0; }
+.ed-conds { display: flex; flex-direction: column; gap: 4px; }
 .ed-warn { margin-top: 8px; padding: 6px 8px; border-radius: 5px; font-size: 11px;
   background: #38240f; border: 1px solid #6b4718; color: #f0c489; }
 .ed-sec > label { display: block; font-size: 10px; text-transform: uppercase;

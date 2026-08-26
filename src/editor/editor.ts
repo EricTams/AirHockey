@@ -18,6 +18,7 @@ import { DialogueEditor } from './dialogueEditor'
 import { EntityEditor } from './entityEditor'
 import { TilesetEditor } from './tilesetEditor'
 import { MapPicker } from './mapPicker'
+import { EventEditor } from './eventEditor'
 import type { ModeManager } from '../core/mode'
 import type { DialogueMode } from '../modes/dialogue'
 import type { GameState } from '../world/gameState'
@@ -62,6 +63,7 @@ export interface EditorHost {
 const TABS = [
   { id: 'map', label: 'Map' },
   { id: 'entities', label: 'Entities' },
+  { id: 'events', label: 'Events' },
   { id: 'dialogue', label: 'Dialogue' },
   { id: 'tileset', label: 'Sheet' },
 ] as const
@@ -89,6 +91,7 @@ export class Editor {
   private entityEditor?: EntityEditor
   private tilesetEditor?: TilesetEditor
   private mapPicker?: MapPicker
+  private eventEditor?: EventEditor
   private target: EditTarget = 'ground'
   private tool: Tool = 'brush'
   private erasing = false
@@ -193,6 +196,21 @@ export class Editor {
       message: (text, tone) => this.message(text, tone),
     })
 
+    this.eventEditor = new EventEditor({
+      server,
+      doc: () => this.doc!,
+      state: this.host.state,
+      applyTouched: (touched) => {
+        if (!isNothing(touched)) this.refresh(touched)
+        this.syncButtons()
+      },
+      paintMarks: (marks, selected) => {
+        this.overlay?.setMarks(marks)
+        this.overlay?.setCursor(selected ? [selected] : [])
+      },
+      message: (text, tone) => this.message(text, tone),
+    })
+
     this.mapPicker = new MapPicker({
       server,
       currentMap: () => this.doc!.map,
@@ -275,12 +293,14 @@ export class Editor {
     this.dialogueEditor?.deactivate()
     this.entityEditor?.deactivate()
     this.tilesetEditor?.deactivate()
+    this.eventEditor?.deactivate()
     this.host.modes.switchNow('overworld')
     this.host.overworld.projection.setZoom(1)
     this.dialogueEditor = undefined
     this.entityEditor = undefined
     this.tilesetEditor = undefined
     this.mapPicker = undefined
+    this.eventEditor = undefined
     this.tab = 'map'
     this.doc = undefined
     this.overlay = undefined
@@ -348,6 +368,7 @@ export class Editor {
     if (!cell) return
 
     if (this.tab === 'entities') { this.entityEditor?.pointerDown(cell); return }
+    if (this.tab === 'events') { this.eventEditor?.pointerDown(cell); return }
 
     if (this.tool === 'eyedropper') { this.eyedrop(cell); return }
 
@@ -387,6 +408,7 @@ export class Editor {
     if (!cell) return
 
     if (this.tab === 'entities') { this.entityEditor?.pointerDrag(cell); return }
+    if (this.tab === 'events') { this.eventEditor?.pointerDrag(cell); return }
 
     const p = this.painting
     if (!p) { this.overlay?.setCursor([cell]); return }
@@ -406,6 +428,7 @@ export class Editor {
   private onPointerUp(e: PointerEvent): void {
     if (this.pan) { this.pan = undefined; return }
     if (this.tab === 'entities') { this.entityEditor?.pointerUp(); return }
+    if (this.tab === 'events') { this.eventEditor?.pointerUp(); return }
     if (!this.painting || e.button !== 0) return
     const p = this.painting
     if (p.preview) this.applyCells(rectCells(p.from, p.last))
@@ -437,7 +460,7 @@ export class Editor {
 
   /** Tabs that act on the world: they pick, pan and zoom against the canvas. */
   private get paintsOnCanvas(): boolean {
-    return this.tab === 'map' || this.tab === 'entities'
+    return this.tab === 'map' || this.tab === 'entities' || this.tab === 'events'
   }
 
 
@@ -497,7 +520,7 @@ export class Editor {
       // Reloads character definitions and dialogue, so it cannot be awaited
       // from a pointer handler. Failures land in the status bar.
       void this.host.overworld.rebuildEntities()
-        .then(() => this.entityEditor?.refresh())
+        .then(() => { this.entityEditor?.refresh(); this.eventEditor?.refresh() })
         .catch((err: Error) => this.message(`Could not rebuild: ${err.message}`, 'err'))
     }
   }
@@ -568,6 +591,7 @@ export class Editor {
     })
     this.mapPicker?.refresh()
     this.entityEditor?.refresh()
+    this.eventEditor?.refresh()
     this.fitMap()
     this.syncButtons()
     if (this.dom) this.dom.dock.querySelector('h4')!.firstChild!.textContent = doc.map.id
@@ -588,6 +612,7 @@ export class Editor {
       const sheet = await this.host.assets.texture(tileset.image)
       this.palette?.setTileset(tileset, sheet.image as CanvasImageSource)
       this.entityEditor?.refresh()
+      this.eventEditor?.refresh()
       this.mapPicker?.refresh()
       this.syncButtons()
       this.applyCamera()
@@ -772,10 +797,12 @@ export class Editor {
     if (this.dialogueEditor) this.dialogueEditor.root.hidden = tab !== 'dialogue'
     if (this.entityEditor) this.entityEditor.root.hidden = tab !== 'entities'
     if (this.tilesetEditor) this.tilesetEditor.root.hidden = tab !== 'tileset'
+    if (this.eventEditor) this.eventEditor.root.hidden = tab !== 'events'
 
     if (tab !== 'dialogue') this.dialogueEditor?.deactivate()
     if (tab !== 'entities') this.entityEditor?.deactivate()
     if (tab !== 'tileset') this.tilesetEditor?.deactivate()
+    if (tab !== 'events') this.eventEditor?.deactivate()
 
     if (tab === 'dialogue') {
       // The grid over a world that is only a backdrop for the box is noise.
@@ -788,6 +815,7 @@ export class Editor {
       if (tab === 'map') this.overlay?.setMarks([])
       if (tab === 'entities') this.entityEditor?.activate()
       if (tab === 'tileset') await this.tilesetEditor?.activate()
+      if (tab === 'events') this.eventEditor?.activate()
     }
     this.syncButtons()
   }
@@ -891,8 +919,8 @@ export class Editor {
       el('span', {}, el('b', {}, 'zoom '), zoomText),
       message)
 
-    dock.append(mapPane, this.entityEditor!.root, this.dialogueEditor!.root,
-      this.tilesetEditor!.root, docFoot)
+    dock.append(mapPane, this.entityEditor!.root, this.eventEditor!.root,
+      this.dialogueEditor!.root, this.tilesetEditor!.root, docFoot)
     // The download packs the whole content folder, so it belongs to the session
     // rather than to whichever pane happens to be showing.
     dock.append(el('div', { class: 'ed-foot3' }, download))

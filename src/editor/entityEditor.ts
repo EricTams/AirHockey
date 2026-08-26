@@ -4,6 +4,7 @@ import type { Tileset } from '../world/tileset'
 import type { Facing } from '../world/character'
 import type { MapDoc, Touched } from './mapDoc'
 import type { Cell } from './tools'
+import { blankPage, type Command, type MapEvent } from '../world/event'
 import { el } from './dom'
 
 /**
@@ -434,7 +435,56 @@ export class EntityEditor {
     out.push(el('div', { class: 'ed-row2' }, swatch, clear))
 
     out.push(el('div', { class: 'ed-hint' }, `Standing on ${npc.x},${npc.y} — drag it on the map to move.`))
+
+    // Events subsume NPCs: the `npcs` array still loads so maps written before
+    // events do not break, but anything that needs a condition needs to be an
+    // event, and retyping it by hand is the sort of chore that stops people.
+    const convert = el('button', { class: 'ed-second', type: 'button' }, 'Turn into an event')
+    convert.onclick = () => { convert.blur(); this.convert(npc) }
+    out.push(el('div', { class: 'ed-row2' }, convert))
+    out.push(el('div', { class: 'ed-hint' },
+      'Same position, sprite and conversation, as one event page you can then ' +
+      'add conditions and more pages to.'))
     return out
+  }
+
+  /**
+   * Rewrite an NPC as the event that does the same thing.
+   *
+   * The hardcoded rule an NPC runs — say your piece, then fight if you have a
+   * battle file — becomes two commands, which is exactly what the runtime used
+   * to do in `tryInteract` and what doc §158 called a stand-in for events.
+   */
+  private convert(npc: MapNpc): void {
+    const doc = this.host.doc()
+    // The NPC is about to be removed, so only the other names are taken.
+    const taken = [
+      ...doc.map.events.map((e) => e.id),
+      ...doc.map.npcs.filter((n) => n.id !== npc.id).map((n) => n.id),
+    ]
+    const id = keepOrUnique(taken, npc.id)
+    const commands: Command[] = []
+    if (npc.dialogue) commands.push({ script: npc.dialogue })
+    if (npc.battle) commands.push({ battle: npc.battle })
+
+    const event: MapEvent = {
+      id,
+      x: npc.x,
+      y: npc.y,
+      pages: [{
+        ...blankPage(),
+        look: { character: npc.character, facing: npc.facing, tint: npc.tint },
+        do: commands,
+      }],
+    }
+    const touched = doc.editMap('turn NPC into an event', (map) => {
+      map.events.push(event)
+      const i = map.npcs.findIndex((n) => n.id === npc.id)
+      if (i >= 0) map.npcs.splice(i, 1)
+    })
+    this.selected = undefined
+    this.after(touched)
+    this.host.message(`"${npc.id}" is now the event "${id}" — see the Events tab`, 'ok')
   }
 
   private startFields(map: GameMap): HTMLElement[] {
@@ -587,4 +637,9 @@ function uniqueId(taken: readonly string[], stem: string): string {
     const id = `${stem}-${n}`
     if (!used.has(id)) return id
   }
+}
+
+/** Keep the name if it is free — a converted "blorb" should still be "blorb". */
+function keepOrUnique(taken: readonly string[], name: string): string {
+  return taken.includes(name) ? uniqueId(taken, name) : name
 }
