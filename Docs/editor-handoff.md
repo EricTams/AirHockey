@@ -4,8 +4,8 @@
 once the editor is finished; it is not part of the design record. The permanent
 spec is `mechanical-design-v1.md`.
 
-Last updated after commit `52a97be` ("Make the overworld data-driven, and stand
-up the level editor's front door").
+Last updated after the editor shell landed: tile painting, collision, undo,
+save, and the zip that carries the designer's work back.
 
 ---
 
@@ -38,8 +38,16 @@ loads `public/data/maps/overworld.json`.
 | `public/data/maps/overworld.json` | The world, one grid row per line |
 | `public/data/tilesets/terrain.json` | The terrain rider file |
 | `tools/editor-server.mjs` | The downloadable helper |
-| `src/editor/server.ts` | Client for the helper, with site fallback |
+| `src/editor/server.ts` | Client for the helper, site fallback, content index |
 | `src/editor/ui.ts` | Edit button, setup panel, edit-mode toggle |
+| `src/core/paths.ts` | `contentUrl` — the read-through the editor redirects |
+| `src/editor/editor.ts` | The editing session: pointers, chrome, wiring |
+| `src/editor/mapDoc.ts` | The map being edited, and the undo stack |
+| `src/editor/tools.ts` | Brush/rect/fill geometry over the grid |
+| `src/editor/mapFile.ts` | Diffable map serialisation |
+| `src/editor/overlay.ts` | Grid, border, collision mask, tool cursor |
+| `src/editor/palette.ts` | The sheet drawn into a canvas, click to select |
+| `src/editor/zip.ts`, `handoff.ts` | "Download my changes" |
 
 **The helper works.** One dependency-free file the designer downloads from the
 published site. Creates `airhockey-content/`, writes only there, no clone and no
@@ -52,10 +60,23 @@ by itself once the helper appears. First run offers a desktop shortcut.
 **Edit mode stops the game.** `Loop.setPaused()` halts logic ticks while still
 presenting frames.
 
+**Content routing works.** The game reads through the helper while editing
+(`contentUrl`), so a save changes the world and an imported sheet is visible at
+all. Leaving the editor keeps the routing: the designer drops into the world
+they just built rather than back into the shipped one.
+
+**Tile painting works.** Brush, rect, fill and eyedropper across the three tile
+layers and the collision grid; stroke-grouped undo/redo; a palette drawn from
+the sheet; zoom and pan; save through the helper. Verified end to end in Chrome:
+paint collision, save, exit, walk into it, get blocked.
+
+**The work gets back.** "Download my changes" zips the content folder under the
+same paths the game loads by, so it unzips straight over `public/`.
+
 ### Not started
 
-Everything that actually edits: palette, painting, import, entity placement,
-dialogue editing, events. That is section 5.
+Tileset import, entity placement, dialogue editing, multiple maps, events.
+That is section 5.
 
 ---
 
@@ -132,11 +153,11 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 
 ## 5. What to build next
 
-**Order** (settled 2026-08-26): 5.0 → 5.1 → 5.4 dialogue → 5.3 entities →
-5.2 import → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
+**Order** (settled 2026-08-26): ~~5.0~~ → ~~5.1~~ → 5.4 dialogue → 5.3 entities
+→ 5.2 import → 5.6 multiple maps → 5.5 events. Dialogue is cheap and gets the
 designer something to react to a stage sooner. Events last, per decision 10.
 
-### 5.0 Content routing
+### 5.0 Content routing — DONE
 
 `fetchJson` (`src/core/paths.ts`) and `Assets.texture` both resolve against
 `document.baseURI` unconditionally, so **the game only ever reads the site**.
@@ -153,7 +174,7 @@ So both loaders need a content source that edit mode swings over to the helper
 (read local, fall back to the site) and back on exit. Small, but 5.1 through 5.6
 all sit on it. Do it first.
 
-### 5.1 Editor shell and tile painting
+### 5.1 Editor shell and tile painting — DONE
 
 **Code changes needed first.** `OverworldMode` keeps everything private and
 loads its map exactly once in `init()`. The editor needs:
@@ -249,7 +270,8 @@ the one operation here that can quietly corrupt a file, so it wants a test.
 
 ## 6. Open questions for Eric
 
-Answered 2026-08-26 — see decisions 8, 9 and 10. What remains:
+Answered 2026-08-26 — see decisions 8, 9 and 10, all three now implemented or
+scheduled. What remains:
 
 1. **Should the Edit button be public?** It is currently visible to every
    visitor of the published site. Harmless without a helper, but prominent.

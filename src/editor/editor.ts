@@ -10,6 +10,7 @@ import { TOOLS, toolCells, rectCells, isPreviewTool, type Cell, type Tool } from
 import { TilePalette } from './palette'
 import { EditorOverlay } from './overlay'
 import { serializeMap } from './mapFile'
+import { bundleChanges, saveBundle } from './handoff'
 import { EDITOR_CSS, DOCK_PX } from './editorCss'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
 
@@ -84,6 +85,7 @@ export class Editor {
     save: HTMLButtonElement
     undo: HTMLButtonElement
     redo: HTMLButtonElement
+    download: HTMLButtonElement
     dot: HTMLElement
     gridCheck: HTMLInputElement
     collisionCheck: HTMLInputElement
@@ -434,6 +436,40 @@ export class Editor {
     }
   }
 
+  /**
+   * Pack the whole content folder into a zip and hand it to the browser.
+   *
+   * This is the only route the designer's work has back to the repo (handoff
+   * decision 8), so it sends everything in the folder rather than only the map
+   * on screen — the point is that nothing they made gets left behind.
+   */
+  async downloadChanges(): Promise<void> {
+    const server = this.server
+    if (!server || !this.dom) return
+    const button = this.dom.download
+    button.disabled = true
+    button.textContent = 'Packing…'
+    try {
+      if (this.doc?.dirty) {
+        // Saying so beats silently exporting the version on disk.
+        this.message('Unsaved edits are not in the zip — save first', 'err')
+        return
+      }
+      const bundle = await bundleChanges(server)
+      if (bundle.paths.length === 0) {
+        this.message('Nothing edited yet, so nothing to send', 'err')
+        return
+      }
+      saveBundle(bundle)
+      this.message(`${bundle.paths.length} file(s) in ${bundle.filename}`, 'ok')
+    } catch (err) {
+      this.message(`Could not pack your changes: ${(err as Error).message}`, 'err')
+    } finally {
+      button.disabled = false
+      button.textContent = 'Download my changes'
+    }
+  }
+
   // --- Keyboard ------------------------------------------------------------
 
   private spaceHeld = false
@@ -563,6 +599,11 @@ export class Editor {
     save.onclick = () => { save.blur(); void this.save() }
     dock.append(el('div', { class: 'ed-foot2' }, undo, redo, save))
 
+    const download = el('button', { class: 'ed-second', type: 'button' },
+      'Download my changes')
+    download.onclick = () => { download.blur(); void this.downloadChanges() }
+    dock.append(el('div', { class: 'ed-foot3' }, download))
+
     const cellText = el('span', {}, '–')
     const tileText = el('span', {}, '–')
     const zoomText = el('span', {}, '1.00x')
@@ -575,7 +616,7 @@ export class Editor {
 
     this.root.append(dock, bar)
     this.dom = {
-      style, dock, bar, tools, targets, erase, save, undo, redo, dot,
+      style, dock, bar, tools, targets, erase, save, undo, redo, download, dot,
       gridCheck: grid.input, collisionCheck: coll.input,
       cellText, tileText, zoomText, message,
     }

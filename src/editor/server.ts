@@ -90,6 +90,13 @@ export class EditorServer {
     return await site.json() as T
   }
 
+  /** Raw bytes of an edited file. Only the helper's copy; no site fallback. */
+  async readBytes(path: string): Promise<Uint8Array> {
+    const res = await fetch(this.url('/api/file', { path }))
+    if (!res.ok) throw new Error(`${path}: ${await errorText(res)}`)
+    return new Uint8Array(await res.arrayBuffer())
+  }
+
   /** True if the designer has an edited copy of this file. */
   async hasLocal(path: string): Promise<boolean> {
     const res = await fetch(this.url('/api/file', { path }))

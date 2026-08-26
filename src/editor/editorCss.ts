@@ -44,6 +44,12 @@ export const EDITOR_CSS = `
 .ed-save:hover { background: #345c8e; }
 .ed-save:disabled { background: #1e2836; border-color: #2a3444; color: #5d6d81;
   cursor: default; }
+.ed-foot3 { padding: 0 12px 12px; }
+.ed-second { width: 100%; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid #2a3444; background: #1a2230; color: #97a7bb;
+  font: inherit; font-size: 11px; cursor: pointer; }
+.ed-second:hover:not(:disabled) { background: #212b3b; color: #d3dfec; }
+.ed-second:disabled { opacity: .5; cursor: default; }
 .ed-icon { padding: 6px 9px; border-radius: 6px; border: 1px solid #2a3444;
   background: #1a2230; color: #97a7bb; font: inherit; font-size: 12px; cursor: pointer; }
 .ed-icon:hover:not(:disabled) { background: #212b3b; color: #d3dfec; }
