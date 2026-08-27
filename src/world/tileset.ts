@@ -290,8 +290,3 @@ export function cellUv(ts: Tileset, index: number, eps = 0.01) {
   const { col, row } = cellOf(ts, index)
   return regionUv(ts, col, row, 1, 1, eps)
 }
-
-/** UV rect covering a whole prop region. */
-export function propUv(ts: Tileset, prop: PropDef, eps = 0.01) {
-  return regionUv(ts, prop.col, prop.row, prop.w, prop.h, eps)
-}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   makeTileset, parseTileset, cellOf, indexOf, isTileIndex, isPaintable,
-  cellUv, propUv, propById, tileCount, describeTileset,
+  cellUv, regionUv, propById, tileCount, describeTileset,
 } from '../src/world/tileset'
 
 /**
@@ -123,9 +123,10 @@ describe('tileset rider file', () => {
     }, 'a.json')).toThrow(/duplicate id "a"/)
   })
 
-  it('spans a whole prop region in one UV rect', () => {
-    const ts = parseTileset({ ...base, props: [{ id: 'wide', col: 0, row: 0, w: 3, h: 1 }] }, 'a.json')
-    const uv = propUv(ts, propById(ts, 'wide')!)
+  it('spans a multi-cell region in one UV rect', () => {
+    // What a prop is drawn from: three cells across, one rect, no seam.
+    const ts = parseTileset(base, 'a.json')
+    const uv = regionUv(ts, 0, 0, 3, 1)
     // The full 144px width of the sheet, inset at both edges.
     expect(uv.u0).toBeGreaterThan(0)
     expect(uv.u1).toBeLessThan(1)
