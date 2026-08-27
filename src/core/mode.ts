@@ -8,6 +8,30 @@ export interface Mode {
 }
 
 /**
+ * Modes the debug key may cycle into, in order.
+ *
+ * Deliberately not every registered mode. `dialogue` and `battle` are entered
+ * *with* something — a script, a battle config — and cycling into them cold is
+ * not a harmless detour: `battle` throws, and `dialogue` opens a conversation
+ * with no lines, which draws nothing at all and cannot be advanced past,
+ * because advancing past the last line is what leaves it. The player gets a
+ * frozen-looking world and no way back.
+ */
+export const DEBUG_CYCLE: readonly string[] = ['overworld', 'gallery']
+
+/**
+ * The next mode for the debug cycle key.
+ *
+ * A current mode outside the cycle — a real conversation or a real battle —
+ * lands on the first entry rather than nowhere, so the key doubles as a way
+ * back out to the world.
+ */
+export function nextDebugMode(current: string, cycle: readonly string[] = DEBUG_CYCLE): string {
+  const i = cycle.indexOf(current)
+  return cycle[(i + 1) % cycle.length]!
+}
+
+/**
  * Single top-level state machine. Transitions are deferred to a tick boundary so
  * a mode can request one from inside its own update() without re-entrancy.
  */

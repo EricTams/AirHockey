@@ -153,7 +153,12 @@ export class DialogueMode implements Mode {
   }
 
   update(_dt: number): void {
-    if (!this.line) return
+    // Nothing to say: leave rather than sit here invisibly. A mode whose only
+    // exit is "advance past the last line" has no exit at all when there are
+    // no lines, and `rebuild` never runs, so there is not even a box on screen
+    // to explain why the world has stopped responding. `parseDialogue` refuses
+    // an empty script from a file; this covers being entered without one.
+    if (!this.line) { this.gfxSwitch(); return }
 
     const complete = this.revealed >= this.fullLength
     if (this.input.pressed('interact')) {

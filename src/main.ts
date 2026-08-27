@@ -1,6 +1,6 @@
 import { Renderer } from './core/renderer'
 import { Input } from './core/input'
-import { ModeManager } from './core/mode'
+import { ModeManager, nextDebugMode } from './core/mode'
 import { Loop } from './core/loop'
 import { Assets } from './core/assets'
 import { DebugOverlay } from './core/debugOverlay'
@@ -47,11 +47,7 @@ modes.switchTo('overworld')
  */
 const tick = (dt: number) => {
   if (input.pressed('debugOverlay')) debug.toggle()
-  if (input.pressed('debugMode')) {
-    const order = modes.names
-    const next = order[(order.indexOf(modes.activeName) + 1) % order.length]!
-    modes.switchTo(next)
-  }
+  if (input.pressed('debugMode')) modes.switchTo(nextDebugMode(modes.activeName))
   // Scrub the camera pitch live to evaluate the 2.5D look against real art.
   if (input.pressed('pitchDown')) overworld.setPitch(overworld.pitch - 5)
   if (input.pressed('pitchUp')) overworld.setPitch(overworld.pitch + 5)
