@@ -23,7 +23,7 @@ import { el } from './dom'
 const FACINGS: Facing[] = ['down', 'up', 'left', 'right']
 
 type PlaceKind = 'npc' | 'prop' | 'warp'
-const DEFAULT_CHARACTER = 'data/characters/character-2.json'
+const DEFAULT_CHARACTER = 'data/characters/civilian-1.json'
 
 /**
  * The player's start is edited like an entity even though it is a field rather

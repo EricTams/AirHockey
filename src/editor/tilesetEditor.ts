@@ -1,6 +1,6 @@
 import type { EditorServer } from './server'
 import type { Assets } from '../core/assets'
-import { parseTileset, type CellKind, type PropDef, type Tileset } from '../world/tileset'
+import { describeClassification, parseTileset, type CellKind, type PropDef, type Tileset } from '../world/tileset'
 import { TILE } from '../core/config'
 import { proposeSheet, gridRows, editableFrom, type Rgba } from './sheetAnalysis'
 import { serializeTileset, toFile } from './tilesetFile'
@@ -46,7 +46,14 @@ interface Draft {
   cols: number
   rows: number
   image: CanvasImageSource
+  /** Unsaved changes, including a fresh import whose rider is not on disk yet. */
   dirty: boolean
+  /**
+   * A person has called at least one cell something. Separate from `dirty`: a
+   * fresh import is dirty (nothing is written yet) but not classified (nothing
+   * is decided yet), and those two facts have to be shown differently.
+   */
+  classified: boolean
 }
 
 export class TilesetEditor {
@@ -107,6 +114,7 @@ export class TilesetEditor {
     image: CanvasImageSource,
     parts: { cells: CellKind[]; solid: boolean[]; props: PropDef[] },
     dirty = false,
+    classified = tileset.reviewed,
   ): void {
     this.draft = {
       path: `${TILESET_DIR}${tileset.id}.json`,
@@ -118,6 +126,7 @@ export class TilesetEditor {
       rows: tileset.rows,
       image,
       dirty,
+      classified,
     }
     this.selectedProp = this.draft.props[0]?.id
     this.fitScale()
@@ -162,12 +171,13 @@ export class TilesetEditor {
       this.setDraft(tileset, bitmap, {
         cells: proposal.cells,
         solid: proposal.solid,
-        props: proposal.props,
-      }, true)
+        props: [],
+      }, true, false)
 
       this.host.message(
         `Imported ${id}: ${proposal.cols}x${proposal.rows} cells, ` +
-        `${proposal.props.length} prop(s) proposed. Check them before saving.`,
+        `${describeClassification(proposal.cells.filter((c) => c === 'tile').length, 0, false)}. ` +
+        'Nothing here is a decision yet — mark the props and the ground.',
         'ok',
       )
     } catch (err) {
@@ -193,8 +203,9 @@ export class TilesetEditor {
       parseTileset(JSON.parse(text), draft.path)
       await this.host.server.write(draft.path, text, 'application/json')
       draft.dirty = false
-      // Saving from here is the act that reviews the sheet, so the header has
-      // to stop calling these the importer's guesses.
+      draft.classified = true
+      // Saving is what puts the designer's classification on disk, so the file
+      // in hand stops being the importer's default too.
       draft.file = { ...draft.file, reviewed: true }
       this.host.message(`Saved ${draft.path}`, 'ok')
       // The map's tiles and props are drawn from this, so show the result.
@@ -291,7 +302,7 @@ export class TilesetEditor {
   }
 
   private touch(): void {
-    if (this.draft) this.draft.dirty = true
+    if (this.draft) { this.draft.dirty = true; this.draft.classified = true }
     this.redraw()
     this.syncButtons()
     this.renderHeader()
@@ -504,13 +515,13 @@ export class TilesetEditor {
     const painted = draft.cells.filter((c) => c === 'tile').length
     this.ui.header.replaceChildren(
       el('div', {}, `${draft.file.id} — ${draft.cols}×${draft.rows} cells of ${TILE}px`),
-      el('div', {}, `${painted} paintable, ${draft.props.length} prop(s)`),
+      el('div', {}, describeClassification(painted, draft.props.length, draft.classified)),
       el('div', {},
-        draft.dirty
-          ? 'Unreviewed changes — saving marks this sheet reviewed.'
-          : draft.file.reviewed
-            ? 'Reviewed.'
-            : 'Never reviewed: these are the importer’s guesses.'),
+        !draft.classified
+          ? 'DEFAULT: measured coverage only. No cell here has been called anything yet.'
+          : draft.dirty
+            ? 'Unsaved changes.'
+            : 'Classified.'),
     )
   }
 

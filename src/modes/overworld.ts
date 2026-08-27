@@ -5,6 +5,7 @@ import type { Input } from '../core/input'
 import type { Assets } from '../core/assets'
 import { Projection } from '../world/projection'
 import { CharacterSprite, walkFrame, type CharacterDef, type Facing } from '../world/character'
+import { frameAtTime } from '../world/aseprite'
 import { buildTileLayer } from '../world/tileLayer'
 import {
   LAYER_NAMES, loadMap, blockedAt, warpAt, eventAt,
@@ -13,7 +14,7 @@ import {
 import type { MapEvent } from '../world/event'
 import type { GameState } from '../world/gameState'
 import { EventRunner, type Request } from '../world/eventRunner'
-import { propById, type PropDef, type Tileset } from '../world/tileset'
+import { describeTileset, propById, type PropDef, type Tileset } from '../world/tileset'
 import { buildProp, placeProp } from '../world/prop'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
@@ -28,7 +29,7 @@ const TURN_GRACE = 4
 /** The map the game boots into (doc §10: "the entry map"). */
 export const ENTRY_MAP = 'data/maps/overworld.json'
 /** The player's own sprite is a game constant, not map data. */
-const PLAYER_CHARACTER = 'data/characters/character-1.json'
+const PLAYER_CHARACTER = 'data/characters/sleuth.json'
 
 const DIRS: Record<Facing, [number, number]> = {
   up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
@@ -102,6 +103,8 @@ export class OverworldMode implements Mode {
   private stepFrames = 0
   private stepsTaken = 0
   private turnGrace = 0
+  /** Wall-clock milliseconds the player has been standing still, driving the idle. */
+  private standingMs = 0
   /** Set while a map is loading, which suspends the sim. */
   private traveling = false
 
@@ -669,7 +672,7 @@ export class OverworldMode implements Mode {
     return undefined
   }
 
-  update(_dt: number): void {
+  update(dt: number): void {
     if (!this.player || this.traveling) return
 
     this.stepEventWalks()
@@ -725,10 +728,20 @@ export class OverworldMode implements Mode {
     const y = this.stepFrom[1] + (this.ty - this.stepFrom[1]) * t
 
     const moving = this.stepFrames > 0
-    const frame = moving
-      ? walkFrame(this.stepsTaken, t, this.player.def.framesPerStep, this.player.frameCount(this.facing))
-      : this.player.def.idleFrame
-    this.player.setFrame(this.facing, frame)
+    // Standing time is wall-clock, and resets the moment a step starts, so the
+    // idle always restarts from its first frame rather than resuming mid-cycle.
+    this.standingMs = moving ? 0 : this.standingMs + dt * 1000
+    if (moving) {
+      this.player.setFrame(this.facing, walkFrame(
+        this.stepsTaken, t, this.player.def.framesPerStep, this.player.frameCount(this.facing)))
+    } else if (this.player.hasPose('idle')) {
+      const sheet = this.player.sheetFor(this.facing, 'idle')!
+      this.player.setFrame(this.facing, frameAtTime(sheet, this.standingMs), 'idle')
+    } else {
+      // No idle art: hold one frame of the walk, as every character did before
+      // idles existed.
+      this.player.setFrame(this.facing, this.player.def.idleFrame)
+    }
 
     this.placeEntities(x, y)
     this.proj.lookAt(x, y)
@@ -746,6 +759,11 @@ export class OverworldMode implements Mode {
   get status(): Record<string, string | number> {
     return {
       map: `${this.map?.id ?? '<none>'} ${this.map?.width ?? 0}x${this.map?.height ?? 0}`,
+      // DEFAULT here means the sheet has never been classified, so the world is
+      // being drawn from the importer's measurements. Worth seeing in-game.
+      tileset: this.tileset
+        ? `${this.tileset.id} ${this.tileset.cols}x${this.tileset.rows} — ${describeTileset(this.tileset)}`
+        : '<none>',
       tile: `${this.tx},${this.ty}`,
       facing: this.facing,
       steps: this.stepsTaken,

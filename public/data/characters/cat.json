@@ -1,0 +1,9 @@
+{
+  "id": "cat",
+  "frameSize": [48, 48],
+  "idleFrame": 0,
+  "framesPerStep": 1,
+  "directions": {
+    "*": "assets/characters/demo-homes-cat-walk.json"
+  }
+}

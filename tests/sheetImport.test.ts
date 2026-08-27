@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { measureCells, proposeSheet, clusterProps, gridRows, type Rgba } from '../src/editor/sheetAnalysis'
+import { measureCells, proposeSheet, gridRows, type Rgba } from '../src/editor/sheetAnalysis'
 import { serializeTileset, toFile } from '../src/editor/tilesetFile'
 import { parseTileset } from '../src/world/tileset'
 
 /**
- * The importer proposes; the designer decides (handoff decision 5). These tests
- * pin down what it proposes so the review screen has something predictable to
- * correct — not that the proposals are right, which on real art they are not.
+ * The importer measures; the designer decides (handoff decision 5). These tests
+ * pin down what it measures. It deliberately makes no attempt to find props:
+ * see the note at the top of sheetAnalysis.ts for why that was removed rather
+ * than tuned.
  */
 
 /** A sheet of `cols`x`rows` cells, painted by a per-cell alpha function. */
@@ -54,7 +55,6 @@ describe('proposeSheet', () => {
   it('calls a fully covered cell a paintable tile', () => {
     const p = proposeSheet(sheet(1, 1, 4, () => 255), 4)
     expect(p.cells).toEqual(['tile'])
-    expect(p.props).toEqual([])
   })
 
   it('calls an empty cell unused', () => {
@@ -62,63 +62,19 @@ describe('proposeSheet', () => {
     expect(p.cells).toEqual(['unused'])
   })
 
-  it('treats a partly covered cell as a prop candidate, not a tile', () => {
+  it('leaves a partly covered cell unused rather than paintable', () => {
     // A sprite standing on transparency is what a partial cell usually is, and
     // painting it into a tile layer would tile the transparency with it.
     const p = proposeSheet(sheet(1, 1, 4, (_c, _r, _x, y) => (y < 2 ? 255 : 0)), 4)
     expect(p.cells).toEqual(['unused'])
-    expect(p.props).toHaveLength(1)
-    expect(p.props[0]).toMatchObject({ col: 0, row: 0, w: 1, h: 1 })
-  })
-})
-
-describe('clusterProps', () => {
-  const P = true, _ = false
-
-  it('boxes one connected run', () => {
-    const props = clusterProps([
-      _, _, _,
-      _, P, P,
-      _, P, _,
-    ], 3, 3)
-    expect(props).toHaveLength(1)
-    expect(props[0]).toMatchObject({ col: 1, row: 1, w: 2, h: 2 })
   })
 
-  it('keeps two separated runs apart', () => {
-    const props = clusterProps([
-      P, _, P,
-      _, _, _,
-      _, _, _,
-    ], 3, 3)
-    expect(props).toHaveLength(2)
-  })
-
-  it('merges runs that touch only diagonally', () => {
-    // Eight-connected on purpose: a canopy overhanging a trunk touches this
-    // way. The cost is documented — on the shipped sheet the terrace and the
-    // plateau merge, and the review screen is how that gets split.
-    const props = clusterProps([
-      P, _, _,
-      _, P, _,
-      _, _, _,
-    ], 3, 3)
-    expect(props).toHaveLength(1)
-    expect(props[0]).toMatchObject({ col: 0, row: 0, w: 2, h: 2 })
-  })
-
-  it('anchors a proposal at bottom-centre, where sprites anchor', () => {
-    const props = clusterProps([
-      P, P, P,
-      P, P, P,
-      _, _, _,
-    ], 3, 3)
-    expect(props[0]).toMatchObject({ w: 3, h: 2, anchor: [1, 1] })
-  })
-
-  it('gives every proposal a distinct id', () => {
-    const props = clusterProps([P, _, P, _, _, _, P, _, P], 3, 3)
-    expect(new Set(props.map((p) => p.id)).size).toBe(props.length)
+  it('proposes no props at all, on any input', () => {
+    // Not an oversight: an automatic prop finder was removed because its
+    // answers read as decisions. The empty list is honest, and describeTileset
+    // tags it DEFAULT so nobody reads it as "this sheet has no props".
+    const p = proposeSheet(sheet(3, 3, 4, (c, r) => (c === r ? 128 : 0)), 4)
+    expect(p).not.toHaveProperty('props')
   })
 })
 
@@ -134,9 +90,13 @@ describe('gridRows', () => {
 
 describe('serializeTileset', () => {
   it('reproduces the shipped rider byte for byte', () => {
-    const text = readFileSync('public/data/tilesets/terrain.json', 'utf8')
-    const tileset = parseTileset(JSON.parse(text), 'terrain')
-    expect(serializeTileset(toFile(tileset))).toBe(text)
+    // Round-tripped the way the review screen writes it: `toFile` carries the
+    // props and names off the parsed tileset, but the grid is an override,
+    // because the grid is the thing the review screen is editing.
+    const text = readFileSync('public/data/tilesets/city.json', 'utf8')
+    const tileset = parseTileset(JSON.parse(text), 'city')
+    const grid = gridRows(tileset.cells, tileset.solid, tileset.cols, tileset.rows)
+    expect(serializeTileset(toFile(tileset, { grid }))).toBe(text)
   })
 
   it("round-trips a reviewed sheet through the game's own parser", () => {

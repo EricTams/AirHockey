@@ -41,7 +41,7 @@ loads `public/data/maps/overworld.json`.
 | `src/world/tileset.ts` | Grid maths, the rider file, `isPaintable`, `propUv` |
 | `src/world/tileLayer.ts` | Builds one merged mesh per layer (was `groundMesh.ts`) |
 | `public/data/maps/overworld.json` | The world, one grid row per line |
-| `public/data/tilesets/terrain.json` | The terrain rider file |
+| `public/data/tilesets/city.json` | The city rider file |
 | `tools/editor-server.mjs` | The downloadable helper |
 | `src/editor/server.ts` | Client for the helper, site fallback, content index |
 | `src/editor/ui.ts` | Edit button, setup panel, edit-mode toggle |
@@ -162,19 +162,26 @@ Each of these was argued through with Eric. Re-opening them wastes a session.
 
 4. **Edit mode stops the game.** Not an overlay on a running game.
 
-5. **The rider file proposes; the designer decides.** Measured per-cell alpha
-   coverage on the terrain sheet climbs 0.13% → 11.8% with no gap, so no
-   threshold separates art from outline bleed, and clustering merges the terrace
-   and plateau into one blob. Hence `reviewed`. An importer must never present
-   its guesses as settled.
+5. **The importer measures; the designer decides.** Measured per-cell alpha
+   coverage climbs 0.13% → 11.8% with no gap, so no threshold separates art from
+   outline bleed. The importer therefore claims only one thing — a cell covered
+   edge to edge is paintable — and claims nothing at all about props. The
+   automatic prop finder that used to live here was **removed**, not tuned: on
+   the city sheet its 8-connected clustering returned 7 boxes for ~60 objects,
+   one of them 41×10 cells, because a canopy overhanging its neighbour's trunk
+   is indistinguishable from one object at cell resolution. An importer must
+   never present its guesses as settled, and a wrong proposal is worse than
+   none. `describeTileset` is the other half of this: it tags an unclassified
+   sheet `DEFAULT`, so "0 props" is never mistaken for a fact about the art.
 
 6. **Tilesets are addressed through a rider file that states the sheet size**,
    never by measuring the loaded image. `Assets` substitutes a 48×48 placeholder
    for a texture that fails to load, which would silently re-index a 10-column
    sheet as 1-column and move every tile in every map.
 
-7. **Don't over-index on the current art.** It is placeholder. Keep formats
-   general; the terrain rider is deliberately minimal and unreviewed.
+7. **Don't over-index on the current art.** It is placeholder, and it has been
+   replaced once already (the 8-25 drop's terrain and Character 1/2 gave way to
+   the 8-27 city drop wholesale). Keep formats general.
 
 8. **Edits come back as a zip.** The editor offers "download my changes"; Eric
    unzips it over `public/` and commits. A helper that opens a PR was weighed
@@ -284,12 +291,14 @@ Eric asked for this explicitly. The helper already permits `.png` writes.
    'image/png')`.
 2. Decode in the **browser** (`createImageBitmap` + canvas) — the helper has no
    image decoder and should not grow one.
-3. Propose a classification: fully-opaque cells → `T`; 8-connected clusters of
-   partially-opaque cells → prop bounding boxes.
-4. Write `data/tilesets/<id>.json` with `reviewed: false`.
+3. Propose a classification: fully-covered cells → `T`, everything else `.`.
+   No prop detection — see decision 5.
+4. Write `data/tilesets/<id>.json` with `reviewed: false`, which the UI reports
+   as `DEFAULT`.
 5. **Build the review screen in the same stage.** Per decision 5, a proposal the
    designer cannot correct is worse than no proposal. Toggle cell kinds, drag
-   prop rectangles, set anchors; saving marks `reviewed: true`.
+   prop rectangles, set anchors; saving marks `reviewed: true` and the `DEFAULT`
+   tag drops on the first edit, not on the save.
 
 ### 5.3 Entity placement — DONE
 

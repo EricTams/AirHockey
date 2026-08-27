@@ -1,0 +1,337 @@
+{
+  "id": "city",
+  "image": "assets/terrain/city-tiles-tileset.png",
+  "tilePx": 48,
+  "size": [4224, 512],
+  "reviewed": true,
+  "grid": [
+    "........................................................................................",
+    "....TT...............................TTT........TTT.....TTT.............................",
+    ".TTTTTT..............................TTT........TTT.....TTT.............................",
+    ".T.TT................................TTT........TTT.....TTT.............................",
+    "......TTT...............................................................................",
+    ".TTTT.TTT............................SS.........SS......................................",
+    ".T..T.TTT............................SSS........SSS.....................................",
+    ".T..T........................................................T..........................",
+    ".TTTT.TTT...................................................TTT.........................",
+    "............................................................TTT........................."
+  ],
+  "props": [
+    {
+      "id": "street-lamp-arm",
+      "name": "Street lamp (arm)",
+      "col": 6, "row": 0,
+      "w": 2, "h": 3,
+      "anchor": [1, 2],
+      "solid": true
+    },
+    {
+      "id": "hedge-column",
+      "name": "Hedge column",
+      "col": 9, "row": 0,
+      "w": 1, "h": 3,
+      "anchor": [0, 2],
+      "solid": true
+    },
+    {
+      "id": "stop-sign",
+      "name": "Stop sign",
+      "col": 10, "row": 3,
+      "w": 1, "h": 3,
+      "anchor": [0, 2],
+      "solid": true
+    },
+    {
+      "id": "notice-sign",
+      "name": "Notice sign",
+      "col": 10, "row": 6,
+      "w": 1, "h": 1,
+      "anchor": [0, 0],
+      "solid": true
+    },
+    {
+      "id": "house-red",
+      "name": "House, red roof",
+      "col": 11, "row": 0,
+      "w": 5, "h": 6,
+      "anchor": [2, 5],
+      "solid": true
+    },
+    {
+      "id": "house-blue",
+      "name": "House, blue roof",
+      "col": 16, "row": 0,
+      "w": 5, "h": 6,
+      "anchor": [2, 5],
+      "solid": true
+    },
+    {
+      "id": "statue",
+      "name": "Statue",
+      "col": 16, "row": 6,
+      "w": 2, "h": 3,
+      "anchor": [1, 2],
+      "solid": true
+    },
+    {
+      "id": "shrub",
+      "name": "Shrub",
+      "col": 12, "row": 6,
+      "w": 3, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "flamingos",
+      "name": "Lawn flamingos",
+      "col": 18, "row": 6,
+      "w": 3, "h": 4,
+      "anchor": [1, 3],
+      "solid": false
+    },
+    {
+      "id": "speed-sign",
+      "name": "20 Is Plenty sign",
+      "col": 13, "row": 8,
+      "w": 1, "h": 2,
+      "anchor": [0, 1],
+      "solid": true
+    },
+    {
+      "id": "terrace-steps-blue",
+      "name": "Terrace steps, blue",
+      "col": 33, "row": 1,
+      "w": 3, "h": 7,
+      "anchor": [1, 6],
+      "solid": true
+    },
+    {
+      "id": "cliff-stack-blue",
+      "name": "Cliff stack, blue",
+      "col": 41, "row": 0,
+      "w": 3, "h": 9,
+      "anchor": [1, 8],
+      "solid": true
+    },
+    {
+      "id": "bush-blockout",
+      "name": "Bush blockout",
+      "col": 38, "row": 8,
+      "w": 3, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "terrace-steps-dirt",
+      "name": "Terrace steps, dirt",
+      "col": 44, "row": 1,
+      "w": 3, "h": 7,
+      "anchor": [1, 6],
+      "solid": true
+    },
+    {
+      "id": "cliff-stack-dirt",
+      "name": "Cliff stack, dirt",
+      "col": 52, "row": 0,
+      "w": 3, "h": 8,
+      "anchor": [1, 7],
+      "solid": true
+    },
+    {
+      "id": "building-greybox",
+      "name": "Building, greybox",
+      "col": 22, "row": 3,
+      "w": 5, "h": 7,
+      "anchor": [2, 6],
+      "solid": true
+    },
+    {
+      "id": "roofline",
+      "name": "Roofline",
+      "col": 28, "row": 4,
+      "w": 5, "h": 2,
+      "anchor": [2, 1],
+      "solid": true
+    },
+    {
+      "id": "chair-left",
+      "name": "Chair, left",
+      "col": 29, "row": 6,
+      "w": 1, "h": 2,
+      "anchor": [0, 1],
+      "solid": true
+    },
+    {
+      "id": "table",
+      "name": "Table",
+      "col": 30, "row": 6,
+      "w": 1, "h": 2,
+      "anchor": [0, 1],
+      "solid": true
+    },
+    {
+      "id": "chair-right",
+      "name": "Chair, right",
+      "col": 31, "row": 6,
+      "w": 1, "h": 2,
+      "anchor": [0, 1],
+      "solid": true
+    },
+    {
+      "id": "easel",
+      "name": "Easel",
+      "col": 28, "row": 8,
+      "w": 1, "h": 2,
+      "anchor": [0, 1],
+      "solid": true
+    },
+    {
+      "id": "television",
+      "name": "Television",
+      "col": 29, "row": 8,
+      "w": 1, "h": 2,
+      "anchor": [0, 1],
+      "solid": true
+    },
+    {
+      "id": "bed",
+      "name": "Bed",
+      "col": 30, "row": 8,
+      "w": 2, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "tree-round-a",
+      "name": "Round tree A",
+      "col": 61, "row": 0,
+      "w": 2, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "tree-round-b",
+      "name": "Round tree B",
+      "col": 63, "row": 0,
+      "w": 2, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "couch",
+      "name": "Couch",
+      "col": 62, "row": 2,
+      "w": 4, "h": 2,
+      "anchor": [2, 1],
+      "solid": true
+    },
+    {
+      "id": "bush-a",
+      "name": "Bush A",
+      "col": 63, "row": 4,
+      "w": 3, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "bush-b",
+      "name": "Bush B",
+      "col": 63, "row": 6,
+      "w": 3, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "tree-tall-a",
+      "name": "Tall tree A",
+      "col": 55, "row": 5,
+      "w": 2, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "tree-tall-b",
+      "name": "Tall tree B",
+      "col": 55, "row": 7,
+      "w": 2, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "building-grey",
+      "name": "Building, grey",
+      "col": 68, "row": 0,
+      "w": 5, "h": 8,
+      "anchor": [2, 7],
+      "solid": true
+    },
+    {
+      "id": "steps-block",
+      "name": "Steps and verge",
+      "col": 73, "row": 1,
+      "w": 3, "h": 3,
+      "anchor": [1, 2],
+      "solid": true
+    },
+    {
+      "id": "planter-bush",
+      "name": "Bush in planter",
+      "col": 67, "row": 8,
+      "w": 3, "h": 2,
+      "anchor": [1, 1],
+      "solid": true
+    },
+    {
+      "id": "curb-block",
+      "name": "Curb block",
+      "col": 76, "row": 7,
+      "w": 1, "h": 1,
+      "anchor": [0, 0],
+      "solid": true
+    },
+    {
+      "id": "tree-large",
+      "name": "Large tree",
+      "col": 77, "row": 0,
+      "w": 6, "h": 5,
+      "anchor": [3, 4],
+      "solid": true
+    },
+    {
+      "id": "tree-medium",
+      "name": "Medium tree",
+      "col": 83, "row": 0,
+      "w": 4, "h": 4,
+      "anchor": [2, 3],
+      "solid": true
+    },
+    {
+      "id": "street-lamp",
+      "name": "Street lamp",
+      "col": 77, "row": 5,
+      "w": 1, "h": 3,
+      "anchor": [0, 2],
+      "solid": true
+    }
+  ],
+  "names": {
+    "100": "Roof, red",
+    "105": "Roof, blue",
+    "177": "Crosswalk, vertical",
+    "178": "Centre line",
+    "179": "Arrow, right turn",
+    "182": "Arrow, left",
+    "214": "Grass",
+    "233": "White floor",
+    "246": "Building wall, light",
+    "265": "Crosswalk, horizontal",
+    "267": "Lane line, vertical",
+    "268": "Lane line, horizontal",
+    "376": "Building wall, plain",
+    "447": "Water",
+    "478": "Blue cliff face",
+    "489": "Dirt cliff face",
+    "510": "Building wall, dark",
+    "765": "Gravel"
+  }
+}

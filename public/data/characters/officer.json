@@ -1,0 +1,9 @@
+{
+  "id": "officer",
+  "frameSize": [64, 96],
+  "idleFrame": 0,
+  "framesPerStep": 2,
+  "directions": {
+    "*": "assets/characters/officer-walk.json"
+  }
+}

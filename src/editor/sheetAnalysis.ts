@@ -1,26 +1,29 @@
-import { GRID_LEGEND, type CellKind, type PropDef, type Tileset } from '../world/tileset'
+import { GRID_LEGEND, type CellKind, type Tileset } from '../world/tileset'
 
 /**
- * Guessing what is on a freshly imported sheet.
+ * Measuring a freshly imported sheet.
  *
- * Read the handoff's decision 5 before touching this. Measured per-cell alpha
- * coverage on the shipped terrain sheet climbs from 0.13% to 11.8% with no gap
- * anywhere in the range, so no threshold cleanly separates real art from
- * outline bleed; and 8-connected clustering merges its terrace and its plateau
- * into a single blob. That is not a bug to be tuned out — it is what real art
- * looks like, and it is why the rider file carries `reviewed`.
+ * This measures; it does not guess. A cell that is covered edge to edge can be
+ * painted into a tile layer without dragging transparency along with it, and
+ * that is the only claim made here. Everything else — which cells are ground
+ * and which are the face of a building, where one object ends and the next
+ * begins — is a designer's call, made in the review screen.
  *
- * So this is written to be a starting point a designer corrects, not an answer.
- * It is deliberately simple and legible rather than clever: an elaborate
- * heuristic would be wrong in ways that are harder to see and harder to fix.
+ * There used to be an automatic prop finder here that boxed 8-connected runs of
+ * partly covered cells. It was removed rather than tuned. On the city sheet it
+ * returned seven boxes for sixty-odd objects, one of them 41x10 cells, because
+ * a canopy overhanging its neighbour's trunk is indistinguishable from one
+ * object at cell resolution. A proposal that wrong is worse than none: it reads
+ * as an answer, and the designer's job becomes deleting it before starting.
+ *
+ * So an unclassified sheet reports no props, and says so — `describeTileset`
+ * tags it DEFAULT precisely so "no props" is not mistaken for "no props here".
  */
 
 /** Alpha at or above this counts as covered. Below it is antialiasing. */
 const OPAQUE = 250
 /** A cell this covered is treated as solid art rather than a sprite on space. */
 const FULL_COVERAGE = 0.995
-/** Below this a cell is treated as empty sheet rather than art. */
-const EMPTY_COVERAGE = 0.02
 
 export interface CellStats {
   /** Fraction of the cell's pixels with any alpha at all. */
@@ -34,7 +37,6 @@ export interface SheetProposal {
   rows: number
   cells: CellKind[]
   solid: boolean[]
-  props: PropDef[]
   stats: CellStats[]
 }
 
@@ -74,87 +76,25 @@ export function measureCells(image: Rgba, tilePx: number): {
 }
 
 /**
- * Propose a classification from the measurements.
+ * Classify from the measurements: covered edge to edge means paintable, and
+ * anything else means unused until a designer says otherwise.
  *
- * Fully covered cells become paintable tiles; empty ones become unused; and
- * everything in between is treated as a candidate for a prop, because a sprite
- * standing on transparency is what a partially covered cell usually is.
+ * A partly covered cell is usually a sprite standing on transparency, so it is
+ * left unused rather than made paintable — painting it into a tile layer would
+ * tile the transparency with it. Marking which of those cells form an object is
+ * the review screen's work, not this function's.
  */
 export function proposeSheet(image: Rgba, tilePx: number): SheetProposal {
   const { cols, rows, stats } = measureCells(image, tilePx)
-  const cells: CellKind[] = []
-  const partial: boolean[] = []
-
-  for (const s of stats) {
-    if (s.coverage >= FULL_COVERAGE) { cells.push('tile'); partial.push(false) }
-    else if (s.coverage <= EMPTY_COVERAGE) { cells.push('unused'); partial.push(false) }
-    else { cells.push('unused'); partial.push(true) }
-  }
+  const cells: CellKind[] = stats.map((s) => (s.coverage >= FULL_COVERAGE ? 'tile' : 'unused'))
 
   return {
     cols,
     rows,
     cells,
     solid: new Array<boolean>(cols * rows).fill(false),
-    props: clusterProps(partial, cols, rows),
     stats,
   }
-}
-
-/**
- * Bounding boxes around 8-connected runs of partially covered cells.
- *
- * Eight-connected rather than four, because a tree's canopy overhanging its
- * trunk touches diagonally; the cost is that two objects a diagonal apart merge,
- * which on the shipped sheet they do. The review screen is how that gets fixed.
- */
-export function clusterProps(partial: readonly boolean[], cols: number, rows: number): PropDef[] {
-  const seen = new Uint8Array(cols * rows)
-  const props: PropDef[] = []
-
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      const start = row * cols + col
-      if (!partial[start] || seen[start]) continue
-
-      let minCol = col, maxCol = col, minRow = row, maxRow = row
-      const queue = [start]
-      seen[start] = 1
-      while (queue.length > 0) {
-        const at = queue.pop()!
-        const cx = at % cols
-        const cy = Math.floor(at / cols)
-        minCol = Math.min(minCol, cx); maxCol = Math.max(maxCol, cx)
-        minRow = Math.min(minRow, cy); maxRow = Math.max(maxRow, cy)
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = cx + dx
-            const ny = cy + dy
-            if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue
-            const index = ny * cols + nx
-            if (seen[index] || !partial[index]) continue
-            seen[index] = 1
-            queue.push(index)
-          }
-        }
-      }
-
-      const w = maxCol - minCol + 1
-      const h = maxRow - minRow + 1
-      props.push({
-        id: `prop-${props.length + 1}`,
-        name: `Prop ${props.length + 1}`,
-        col: minCol,
-        row: minRow,
-        w,
-        h,
-        // Bottom-centre, matching where sprites anchor.
-        anchor: [Math.floor(w / 2), h - 1],
-        solid: true,
-      })
-    }
-  }
-  return props
 }
 
 /** The rider's grid rows, one character per cell, per GRID_LEGEND. */

@@ -1,9 +1,9 @@
 {
   "id": "wing",
   "lines": [
-    { "name": "Gravy", "face": "assets/faces/character-2.png",
+    { "name": "Gravy", "face": "assets/faces/civilian-2.png",
       "text": "Do not look at me like that. It was lunch, and then it was in the goal." },
-    { "name": "Gravy", "face": "assets/faces/character-2.png",
+    { "name": "Gravy", "face": "assets/faces/civilian-2.png",
       "text": "I am not playing you. I am not touching it either. Knock it loose and we will call it even." }
   ]
 }

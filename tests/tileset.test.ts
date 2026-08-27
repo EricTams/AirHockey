@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   makeTileset, parseTileset, cellOf, indexOf, isTileIndex, isPaintable,
-  cellUv, propUv, propById, tileCount,
+  cellUv, propUv, propById, tileCount, describeTileset,
 } from '../src/world/tileset'
 
 /**
@@ -137,5 +137,38 @@ describe('tileset rider file', () => {
     expect(ts.names[0]).toBe('grass')
     expect(ts.names[4]).toBe('dirt')
     expect(() => parseTileset({ ...base, names: { 99: 'x' } }, 'a.json')).toThrow(/not a cell index/)
+  })
+})
+
+/**
+ * The classification readout. The counts are the easy half; DEFAULT is the
+ * point. "0 props" from a sheet nobody has looked at is not the same claim as
+ * "0 props" from one a designer has been through, and the file format cannot
+ * tell them apart without saying so out loud.
+ */
+describe('describeTileset', () => {
+  const base = { image: 'a.png', tilePx: 48, size: [96, 96] as [number, number] }
+
+  it('tags an unclassified sheet DEFAULT', () => {
+    const ts = parseTileset({ ...base, grid: ['T.', '..'] }, 'a.json')
+    expect(describeTileset(ts)).toBe('1 tile, 0 props, DEFAULT')
+  })
+
+  it('drops DEFAULT once the sheet is classified', () => {
+    const ts = parseTileset({ ...base, reviewed: true, grid: ['TS', '..'] }, 'a.json')
+    expect(describeTileset(ts)).toBe('2 tiles, 0 props')
+  })
+
+  it('drops DEFAULT for edits in hand, before they reach the file', () => {
+    const ts = parseTileset({ ...base, grid: ['T.', '..'] }, 'a.json')
+    expect(describeTileset(ts, true)).toBe('1 tile, 0 props')
+  })
+
+  it('counts props', () => {
+    const ts = parseTileset({
+      ...base, reviewed: true, grid: ['T.', '..'],
+      props: [{ id: 'tree', col: 0, row: 0, w: 1, h: 2 }],
+    }, 'a.json')
+    expect(describeTileset(ts)).toBe('1 tile, 1 prop')
   })
 })

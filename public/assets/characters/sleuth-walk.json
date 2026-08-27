@@ -1,0 +1,47 @@
+{ "frames": [
+   {
+    "filename": "Sleuth #Walk 0.aseprite",
+    "frame": { "x": 0, "y": 0, "w": 75, "h": 78 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 75, "h": 78 },
+    "sourceSize": { "w": 75, "h": 78 },
+    "duration": 100
+   },
+   {
+    "filename": "Sleuth #Walk 1.aseprite",
+    "frame": { "x": 75, "y": 0, "w": 75, "h": 78 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 75, "h": 78 },
+    "sourceSize": { "w": 75, "h": 78 },
+    "duration": 100
+   },
+   {
+    "filename": "Sleuth #Walk 2.aseprite",
+    "frame": { "x": 150, "y": 0, "w": 75, "h": 78 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 75, "h": 78 },
+    "sourceSize": { "w": 75, "h": 78 },
+    "duration": 100
+   },
+   {
+    "filename": "Sleuth #Walk 3.aseprite",
+    "frame": { "x": 225, "y": 0, "w": 75, "h": 78 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 75, "h": 78 },
+    "sourceSize": { "w": 75, "h": 78 },
+    "duration": 100
+   }
+ ],
+ "meta": {
+  "app": "https://www.aseprite.org/",
+  "version": "1.3.18.3-x64",
+  "image": "Sleuth-Walk.png",
+  "format": "RGBA8888",
+  "size": { "w": 300, "h": 78 },
+  "scale": "1"
+ }
+}

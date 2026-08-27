@@ -1,0 +1,13 @@
+{
+  "id": "sleuth",
+  "frameSize": [75, 78],
+  "idleFrame": 0,
+  "framesPerStep": 2,
+  "directions": {
+    "*": "assets/characters/sleuth-walk.json"
+  },
+  "idle": {
+    "*": "assets/characters/sleuth-idle.json"
+  },
+  "mirror": ["left"]
+}

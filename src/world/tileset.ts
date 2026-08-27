@@ -64,10 +64,11 @@ export interface Tileset {
   readonly cols: number
   readonly rows: number
   /**
-   * False until a designer has confirmed the importer's guesses. The importer
-   * classifies from pixel coverage, which on real art is a proposal, not an
-   * answer — the shipped terrain sheet's outline bleed makes its terrace and
-   * plateau look like one connected object.
+   * False while the classification is still the importer's default. The
+   * importer only measures coverage; it does not know a roof from a road or
+   * where one object ends, so until this is true the grid and the empty prop
+   * list are measurements rather than claims. `describeTileset` is how that
+   * distinction reaches a person.
    */
   readonly reviewed: boolean
   /** Per-index kind, length cols*rows. */
@@ -203,6 +204,29 @@ export function parseTileset(raw: unknown, path: string): Tileset {
     reviewed: d.reviewed === true,
     cells, solid, props, names,
   }
+}
+
+/**
+ * What a rider claims about a sheet, and whether anyone claimed it.
+ *
+ * `DEFAULT` is the important half. Without it "0 props" reads as a fact about
+ * the art, when it is really a fact about the file: nobody has marked the props
+ * yet. The counts before it are the importer's measurements, not decisions.
+ * The tag drops the moment a designer changes a cell — from then on the numbers
+ * mean what they say.
+ *
+ * `pending` is for the review screen, which has unsaved edits in hand and is
+ * therefore already past DEFAULT even though the file on disk is not.
+ */
+export function describeTileset(ts: Tileset, pending = false): string {
+  return describeClassification(
+    ts.cells.filter((c) => c === 'tile').length, ts.props.length, ts.reviewed || pending,
+  )
+}
+
+export function describeClassification(tiles: number, props: number, classified: boolean): string {
+  const counts = `${tiles} ${tiles === 1 ? 'tile' : 'tiles'}, ${props} ${props === 1 ? 'prop' : 'props'}`
+  return classified ? counts : `${counts}, DEFAULT`
 }
 
 /** Total addressable cells. Valid indices are 0..count-1, plus EMPTY_TILE. */

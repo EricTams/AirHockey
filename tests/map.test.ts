@@ -94,35 +94,36 @@ describe('parseMap', () => {
 })
 
 describe('shipped data files', () => {
-  const tsDef = JSON.parse(readFileSync('public/data/tilesets/terrain.json', 'utf8'))
+  const tsDef = JSON.parse(readFileSync('public/data/tilesets/city.json', 'utf8'))
   const raw = JSON.parse(readFileSync('public/data/maps/overworld.json', 'utf8'))
 
-  it('the terrain rider states the sheet the art actually is', () => {
-    const ts = parseTileset(tsDef, 'terrain.json')
-    expect(ts.cols).toBe(10)
-    expect(ts.rows).toBe(9)
+  it('the city rider states the sheet the art actually is', () => {
+    const ts = parseTileset(tsDef, 'city.json')
+    expect(ts.cols).toBe(88)
+    expect(ts.rows).toBe(10)
   })
 
   it('the entry map parses against it', () => {
-    const ts = parseTileset(tsDef, 'terrain.json')
+    const ts = parseTileset(tsDef, 'city.json')
     const m = parseMap(raw, ts, 'overworld.json')
     expect(m.width).toBe(20)
-    expect(m.height).toBe(12)
-    for (const name of LAYER_NAMES) expect(m.layers[name]).toHaveLength(240)
+    expect(m.height).toBe(14)
+    for (const name of LAYER_NAMES) expect(m.layers[name]).toHaveLength(280)
   })
 
   it('carries the three opponents with their dialogue and battles', () => {
-    const ts = parseTileset(tsDef, 'terrain.json')
+    const ts = parseTileset(tsDef, 'city.json')
     const m = parseMap(raw, ts, 'overworld.json')
-    expect(m.npcs.map((n) => n.id)).toEqual(['blorb', 'wing', 'plumber'])
-    for (const n of m.npcs) {
+    const opponents = m.npcs.filter((n) => n.battle)
+    expect(opponents.map((n) => n.id)).toEqual(['blorb', 'wing', 'plumber'])
+    for (const n of opponents) {
       expect(n.dialogue).toMatch(/^data\/dialogue\/.+\.json$/)
       expect(n.battle).toMatch(/^data\/battles\/.+\.json$/)
     }
   })
 
   it('starts the player on a passable tile that no NPC occupies', () => {
-    const ts = parseTileset(tsDef, 'terrain.json')
+    const ts = parseTileset(tsDef, 'city.json')
     const m = parseMap(raw, ts, 'overworld.json')
     const { x, y } = m.playerStart
     expect(blockedAt(m, x, y)).toBe(false)

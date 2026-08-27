@@ -1,0 +1,9 @@
+{
+  "id": "civilian-1",
+  "frameSize": [48, 96],
+  "idleFrame": 0,
+  "framesPerStep": 2,
+  "directions": {
+    "*": "assets/characters/demo-homes-civilians-character1.json"
+  }
+}

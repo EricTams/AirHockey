@@ -689,7 +689,7 @@ function lastCharacter(map: GameMap): string {
     const look = map.events[i]!.pages.find((p) => p.look)?.look
     if (look) return look.character
   }
-  return map.npcs.at(-1)?.character ?? 'data/characters/character-2.json'
+  return map.npcs.at(-1)?.character ?? 'data/characters/civilian-1.json'
 }
 
 function uniqueId(taken: readonly string[], stem: string): string {

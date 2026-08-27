@@ -6,6 +6,20 @@ import { TILE } from '../core/config'
 export type Facing = 'down' | 'left' | 'right' | 'up'
 export const FACINGS: Facing[] = ['down', 'left', 'right', 'up']
 
+/**
+ * Which set of sheets a character is drawing from.
+ *
+ * The two are animated by different clocks, which is why they are separate
+ * rather than tagged ranges of one sheet: a walk is locked to distance
+ * travelled so the feet cannot slide, and an idle has no distance to lock to,
+ * so it runs on wall-clock at the durations the artist exported.
+ */
+export type Pose = 'walk' | 'idle'
+export const POSES: Pose[] = ['walk', 'idle']
+
+/** Per-facing sheet paths. A "*" key applies one sheet to every facing. */
+export type DirectionSheets = Partial<Record<Facing | '*', string>>
+
 export interface CharacterDef {
   id: string
   frameSize: [number, number]
@@ -19,8 +33,25 @@ export interface CharacterDef {
    * 100ms and a step is 200ms, so 2 keeps the feet locked to the ground.
    */
   framesPerStep: number
-  /** Per-facing sheet paths. A "*" key applies one sheet to every facing. */
-  directions: Partial<Record<Facing | '*', string>>
+  /** Sheets used while walking. */
+  directions: DirectionSheets
+  /**
+   * Sheets used while standing still. Optional: a character without them
+   * stands on `idleFrame` of its walk sheet, which is what every character did
+   * before idles existed.
+   */
+  idle?: DirectionSheets
+  /**
+   * Facings drawn by mirroring their sheet horizontally.
+   *
+   * A side view is one drawing that serves two facings, so a sheet listed here
+   * is flipped rather than duplicated on disk. It is declared rather than
+   * inferred because mirroring is only ever right for the left/right pair: the
+   * mirror of a front view is another front view, not a back one, so a rule
+   * like "flip when the opposite facing has art" would silently draw a
+   * character walking away from you facing you.
+   */
+  mirror?: Facing[]
 }
 
 /**
@@ -30,12 +61,17 @@ export interface CharacterDef {
  */
 export class CharacterSprite {
   readonly mesh: THREE.Mesh
-  private sheets = new Map<Facing, SpriteSheet>()
+  private poses: Record<Pose, Map<Facing, SpriteSheet>> = { walk: new Map(), idle: new Map() }
   private material: THREE.MeshBasicMaterial
   private uv: THREE.BufferAttribute
-  private current: { facing: Facing; frame: number } = { facing: 'down', frame: -1 }
+  private mirrored: ReadonlySet<Facing>
+  // Pose is part of the key: walk frame 0 and idle frame 0 are different
+  // pictures, so a change of pose alone still has to rewrite the UVs.
+  private current: { facing: Facing; frame: number; pose: Pose } =
+    { facing: 'down', frame: -1, pose: 'walk' }
 
   private constructor(readonly def: CharacterDef) {
+    this.mirrored = new Set((def.mirror ?? []).filter((f) => FACINGS.includes(f)))
     const [fw, fh] = def.frameSize
     // Plane sized in tiles, origin translated to the bottom-centre so the
     // projection can rotate it about its base.
@@ -52,62 +88,98 @@ export class CharacterSprite {
 
   static async load(def: CharacterDef, assets: Assets): Promise<CharacterSprite> {
     const sprite = new CharacterSprite(def)
-    const shared = def.directions['*']
-    for (const facing of FACINGS) {
-      const url = def.directions[facing] ?? shared
-      if (!url) continue
-      sprite.sheets.set(facing, await loadAseprite(url, assets))
-    }
-    if (sprite.sheets.size === 0) throw new Error(`character ${def.id}: no direction sheets`)
+    await sprite.loadPose('walk', def.directions, assets)
+    if (def.idle) await sprite.loadPose('idle', def.idle, assets)
+    if (sprite.poses.walk.size === 0) throw new Error(`character ${def.id}: no direction sheets`)
     sprite.setFrame('down', def.idleFrame)
     return sprite
   }
 
+  private async loadPose(pose: Pose, sheets: DirectionSheets, assets: Assets): Promise<void> {
+    const shared = sheets['*']
+    for (const facing of FACINGS) {
+      const url = sheets[facing] ?? shared
+      if (!url) continue
+      this.poses[pose].set(facing, await loadAseprite(url, assets))
+    }
+  }
+
   /**
-   * Multiply the sprite's colour. All three NPCs share Character 2's sheet, so
-   * a tint is what tells them apart until they have their own art.
+   * The sheet to draw, falling back twice: to any facing this pose does have,
+   * and then to the walk pose. Both matter — a character may be drawn from one
+   * side only, and most characters have no idle art at all.
+   */
+  private resolve(facing: Facing, pose: Pose): SpriteSheet | undefined {
+    const inPose = this.poses[pose]
+    const found = inPose.get(facing) ?? inPose.values().next().value
+    if (found) return found
+    return pose === 'walk' ? undefined : this.resolve(facing, 'walk')
+  }
+
+  /**
+   * Multiply the sprite's colour. Each civilian has their own sheet now, so
+   * this is dressing rather than the only thing telling two NPCs apart.
    */
   setTint(hex: number): void {
     this.material.color.setHex(hex)
   }
 
   /** The sheet for a facing, so callers can reuse its texture and frames. */
-  sheetFor(facing: Facing): SpriteSheet | undefined {
-    return this.sheets.get(facing) ?? this.sheets.values().next().value
+  sheetFor(facing: Facing, pose: Pose = 'walk'): SpriteSheet | undefined {
+    return this.resolve(facing, pose)
   }
 
   /** Sheets actually present, for reporting which facings fall back. */
-  get facingsLoaded(): Facing[] { return [...this.sheets.keys()] }
+  facingsLoaded(pose: Pose = 'walk'): Facing[] { return [...this.poses[pose].keys()] }
 
-  frameCount(facing: Facing): number {
-    return (this.sheets.get(facing) ?? this.sheets.values().next().value)?.frames.length ?? 0
+  /** True if this character has art of its own for a pose. */
+  hasPose(pose: Pose): boolean { return this.poses[pose].size > 0 }
+
+  frameCount(facing: Facing, pose: Pose = 'walk'): number {
+    return this.resolve(facing, pose)?.frames.length ?? 0
   }
 
-  setFrame(facing: Facing, frame: number): void {
-    const sheet = this.sheets.get(facing) ?? this.sheets.values().next().value
+  setFrame(facing: Facing, frame: number, pose: Pose = 'walk'): void {
+    const sheet = this.resolve(facing, pose)
     if (!sheet) return
     const idx = ((frame % sheet.frames.length) + sheet.frames.length) % sheet.frames.length
-    if (this.current.facing === facing && this.current.frame === idx) return
-    this.current = { facing, frame: idx }
+    if (this.current.facing === facing && this.current.frame === idx && this.current.pose === pose) return
+    this.current = { facing, frame: idx, pose }
 
     if (this.material.map !== sheet.texture) {
       this.material.map = sheet.texture
       this.material.needsUpdate = true
     }
-    const f = sheet.frames[idx]!
-    // PlaneGeometry UV order: TL, TR, BL, BR.
-    const a = this.uv.array as Float32Array
-    a[0] = f.u0; a[1] = f.v1
-    a[2] = f.u1; a[3] = f.v1
-    a[4] = f.u0; a[5] = f.v0
-    a[6] = f.u1; a[7] = f.v0
+    writeFrameUv(this.uv.array as Float32Array, sheet.frames[idx]!, this.mirrored.has(facing))
     this.uv.needsUpdate = true
   }
+
+  /** True if this facing is drawn by flipping its sheet. */
+  isMirrored(facing: Facing): boolean { return this.mirrored.has(facing) }
 
   dispose(): void {
     this.mesh.geometry.dispose()
     this.material.dispose()
   }
+}
+
+/**
+ * Write a frame's UVs in PlaneGeometry's vertex order: TL, TR, BL, BR.
+ *
+ * Mirroring swaps the two u values, which reflects the quad's texture about its
+ * own vertical centre. Deliberately not a negative scale on the mesh: that
+ * would flip the winding order, and the sprite would vanish for anything
+ * culling back faces.
+ */
+export function writeFrameUv(
+  a: Float32Array | number[], f: { u0: number; u1: number; v0: number; v1: number }, flip = false,
+): void {
+  const left = flip ? f.u1 : f.u0
+  const right = flip ? f.u0 : f.u1
+  a[0] = left;  a[1] = f.v1
+  a[2] = right; a[3] = f.v1
+  a[4] = left;  a[5] = f.v0
+  a[6] = right; a[7] = f.v0
 }
 
 /**

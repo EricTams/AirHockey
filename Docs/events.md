@@ -27,7 +27,7 @@ A guard who steps aside once you have beaten them is one event with two pages.
       "when": [{ "flag": "beat-blorb", "is": false }],
       "trigger": "talk",
       "blocks": true,
-      "look": { "character": "data/characters/character-2.json", "facing": "down" },
+      "look": { "character": "data/characters/civilian-1.json", "facing": "down" },
       "do": [
         { "script": "data/dialogue/blorb.json" },
         { "battle": "data/battles/blorb.json",
@@ -39,7 +39,7 @@ A guard who steps aside once you have beaten them is one event with two pages.
       "when": [],
       "trigger": "talk",
       "blocks": false,
-      "look": { "character": "data/characters/character-2.json", "facing": "down" },
+      "look": { "character": "data/characters/civilian-1.json", "facing": "down" },
       "do": [{ "say": [{ "name": "Blorb", "text": "Table's yours." }] }]
     }
   ]

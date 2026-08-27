@@ -6,8 +6,8 @@ import { parseTileset } from '../src/world/tileset'
 import { blankMap } from '../src/editor/mapDoc'
 
 const tileset = parseTileset(
-  JSON.parse(readFileSync('public/data/tilesets/terrain.json', 'utf8')),
-  'data/tilesets/terrain.json',
+  JSON.parse(readFileSync('public/data/tilesets/city.json', 'utf8')),
+  'data/tilesets/city.json',
 )
 const shippedText = readFileSync('public/data/maps/overworld.json', 'utf8')
 const shipped = parseMap(JSON.parse(shippedText), tileset, 'overworld')

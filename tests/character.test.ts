@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { walkFrame } from '../src/world/character'
+import { walkFrame, writeFrameUv } from '../src/world/character'
 
 /**
  * The walk cycle is locked to distance, not wall-clock: 4 frames at 2 per tile
@@ -47,5 +47,54 @@ describe('walkFrame', () => {
 
   it('returns 0 rather than NaN for an empty sheet', () => {
     expect(walkFrame(3, 0.5, PER, 0)).toBe(0)
+  })
+})
+
+/**
+ * A side view is one drawing serving two facings. The flip is a UV swap rather
+ * than a negative scale on the mesh, because a negative scale reverses the
+ * winding order and the sprite disappears under back-face culling.
+ */
+describe('writeFrameUv', () => {
+  // A frame occupying the left quarter of its sheet, upper half.
+  const frame = { u0: 0, u1: 0.25, v0: 0.5, v1: 1 }
+  const uv = () => new Array(8).fill(-1)
+
+  it('writes TL, TR, BL, BR in PlaneGeometry order', () => {
+    const a = uv()
+    writeFrameUv(a, frame)
+    expect(a).toEqual([
+      0, 1,        // top-left
+      0.25, 1,     // top-right
+      0, 0.5,      // bottom-left
+      0.25, 0.5,   // bottom-right
+    ])
+  })
+
+  it('swaps the two u values when mirrored, and leaves v alone', () => {
+    const a = uv()
+    writeFrameUv(a, frame, true)
+    expect(a).toEqual([
+      0.25, 1,
+      0, 1,
+      0.25, 0.5,
+      0, 0.5,
+    ])
+  })
+
+  it('stays inside the same frame, so mirroring never samples its neighbour', () => {
+    const a = uv()
+    writeFrameUv(a, frame, true)
+    const us = [a[0], a[2], a[4], a[6]] as number[]
+    expect(Math.min(...us)).toBe(frame.u0)
+    expect(Math.max(...us)).toBe(frame.u1)
+  })
+
+  it('is its own inverse', () => {
+    const once = uv(); writeFrameUv(once, frame, true)
+    const twice = uv(); writeFrameUv(twice, { ...frame, u0: frame.u1, u1: frame.u0 }, true)
+    const plain = uv(); writeFrameUv(plain, frame)
+    expect(twice).toEqual(plain)
+    expect(once).not.toEqual(plain)
   })
 })
