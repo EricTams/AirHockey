@@ -5,6 +5,7 @@ import { Loop } from './core/loop'
 import { FailureBanner } from './core/failureBanner'
 import { Assets } from './core/assets'
 import { DebugOverlay } from './core/debugOverlay'
+import { ShadowToggle } from './core/shadowToggle'
 import { GameState } from './world/gameState'
 import { GalleryMode } from './modes/gallery'
 import { OverworldMode } from './modes/overworld'
@@ -25,6 +26,10 @@ const debug = new DebugOverlay()
 const state = new GameState()
 const overworld = new OverworldMode(gfx, input, assets, state)
 await overworld.init()
+
+// Which shadow style to keep is still an open question; the button flips
+// between them against real art rather than against a screenshot.
+const shadowToggle = new ShadowToggle((style) => overworld.setShadowStyle(style), overworld.shadows)
 
 // Dialogue draws over a frozen overworld (doc §7.2), so it renders it directly.
 const dialogue = new DialogueMode(gfx, input, assets, overworld)
@@ -110,6 +115,7 @@ const editor = mountEditorUi({
     // chrome. Editing is the designer's screen, not ours.
     debugWasVisible = debug.visible
     debug.setVisible(false)
+    shadowToggle.setVisible(false)
 
     // Point content reads at the designer's own folder, then rebuild the world
     // from it. Anything they had already edited was loaded from the site during
@@ -139,6 +145,7 @@ const editor = mountEditorUi({
     // is nothing to reload.
     session?.close()
     debug.setVisible(debugWasVisible)
+    shadowToggle.setVisible(true)
     // Resuming play is the moment whatever failed may have just been fixed, so
     // the notice starts clear. If it has not been fixed it is back within a
     // frame, which is the only honest way to dismiss it.
@@ -158,6 +165,7 @@ console.log('[airhockey] booted', {
 if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__game = {
     gfx, input, modes, loop, debug, assets, state, overworld, dialogue, battle, editor,
+    shadowToggle,
     get session() { return session },
     /** Jump straight into any arena, skipping the walk and the dialogue. */
     async startBattle(id = 'blorb') {

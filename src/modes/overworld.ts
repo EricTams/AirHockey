@@ -15,7 +15,9 @@ import type { MapEvent } from '../world/event'
 import type { GameState } from '../world/gameState'
 import { EventRunner, type Request } from '../world/eventRunner'
 import { describeTileset, propById, type PropDef, type Tileset } from '../world/tileset'
-import { buildProp, placeProp } from '../world/prop'
+import { buildProp, placeProp, propOrigin } from '../world/prop'
+import { Shadow, SHADOW_LABELS, type ShadowStyle } from '../world/shadow'
+import { measurePropTrims, NO_TRIM, type ArtTrim } from '../world/artBounds'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
 import { parseDialogue, type DialogueScript } from './dialogue'
@@ -61,6 +63,8 @@ interface PropSlot {
   def: MapProp
   shape: PropDef
   mesh: THREE.Mesh
+  /** Absent while the shadow style is 'none'. */
+  shadow?: Shadow
 }
 
 interface NpcSlot {
@@ -78,6 +82,15 @@ export class OverworldMode implements Mode {
   private proj = new Projection()
   private backdrop = new Backdrop()
   private sprites = new THREE.Group()
+  /**
+   * Shadows sit in their own group so one group order puts every one of them
+   * above the tile layers and below every sprite and prop. Sorting them
+   * against each other would be wrong anyway: a shadow always runs north, so
+   * it only ever falls on ground the props behind it have already been drawn
+   * on.
+   */
+  private shadowGroup = new THREE.Group()
+  private shadowStyle: ShadowStyle = 'blob'
   private player?: CharacterSprite
 
   private map!: GameMap
@@ -85,6 +98,12 @@ export class OverworldMode implements Mode {
   private tileset!: Tileset
   private sheet!: THREE.Texture
   private layers = new Map<LayerName, THREE.Mesh>()
+  /**
+   * Empty margin measured inside each prop's region on the sheet, by prop id.
+   * Empty when the sheet could not be read, which puts every prop back on its
+   * declared region.
+   */
+  private propTrims = new Map<string, ArtTrim>()
   private npcs: NpcSlot[] = []
   private props: PropSlot[] = []
   private events: EventSlot[] = []
@@ -115,6 +134,8 @@ export class OverworldMode implements Mode {
     private state: GameState,
   ) {
     this.sprites.renderOrder = 10
+    this.shadowGroup.renderOrder = 5
+    this.scene.add(this.shadowGroup)
     this.scene.add(this.sprites)
   }
 
@@ -181,6 +202,10 @@ export class OverworldMode implements Mode {
     this.sheet = await this.assets.texture(tileset.image, {
       label: 'TILESET', kind: 'tile', width: tileset.sheetW, height: tileset.sheetH,
     })
+    // Measured once per sheet: props are placed by their region, and several
+    // regions in the drop are taller than the drawing inside them.
+    this.propTrims = measurePropTrims(this.sheet, this.tileset)
+
     // One merged mesh per layer. Indices come from the file, so the grid is
     // unaffected if the sheet fell back to a placeholder.
     this.rebuildLayers()
@@ -207,7 +232,7 @@ export class OverworldMode implements Mode {
       this.player = CharacterSprite.broken({ id: 'player' }, 'PLAYER?')
     }
     this.player.setFrame(this.facing, this.player.def.idleFrame)
-    this.sprites.add(this.player.mesh)
+    this.addSprite(this.player)
 
     await this.rebuildEntities()
 
@@ -240,7 +265,7 @@ export class OverworldMode implements Mode {
       this.noteBroken(slot.def.character, err)
       slot.sprite = CharacterSprite.broken(slot.def, `NPC? ${slot.def.id}`)
     }
-    this.sprites.add(slot.sprite.mesh)
+    this.addSprite(slot.sprite)
 
     if (slot.def.dialogue) {
       try {
@@ -294,10 +319,12 @@ export class OverworldMode implements Mode {
     for (const p of map.props) {
       const shape = propById(this.tileset, p.prop)
       if (!shape) continue   // parseMap rejects this; belt and braces
-      const mesh = buildProp(this.sheet, this.tileset, shape)
+      const mesh = buildProp(this.sheet, this.tileset, shape, this.trimOf(shape))
       placeProp(this.proj, mesh, shape, p.x, p.y)
       this.sprites.add(mesh)
-      this.props.push({ def: p, shape, mesh })
+      const slot: PropSlot = { def: p, shape, mesh }
+      this.dressPropShadow(slot)
+      this.props.push(slot)
     }
 
     await Promise.all([npcs, events])
@@ -349,7 +376,7 @@ export class OverworldMode implements Mode {
     slot.facing = look.facing
     sprite.setFrame(slot.facing, def.idleFrame)
     slot.sprite = sprite
-    this.sprites.add(sprite.mesh)
+    this.addSprite(sprite)
   }
 
   private page(slot: EventSlot) {
@@ -557,11 +584,13 @@ export class OverworldMode implements Mode {
     if (this.player) {
       this.proj.placeBillboard(this.player.mesh, px, py)
       this.player.mesh.renderOrder = this.proj.sortKey(py)
+      this.player.shadow?.place(px, py)
     }
     for (const npc of this.npcs) {
       if (!npc.sprite) continue
       this.proj.placeBillboard(npc.sprite.mesh, npc.tile[0], npc.tile[1])
       npc.sprite.mesh.renderOrder = this.proj.sortKey(npc.tile[1])
+      npc.sprite.shadow?.place(npc.tile[0], npc.tile[1])
     }
     for (const slot of this.events) {
       if (!slot.sprite) continue
@@ -572,9 +601,13 @@ export class OverworldMode implements Mode {
       const ey = slot.stepFrom[1] + (slot.tile[1] - slot.stepFrom[1]) * t
       this.proj.placeBillboard(slot.sprite.mesh, ex, ey)
       slot.sprite.mesh.renderOrder = this.proj.sortKey(ey)
+      slot.sprite.shadow?.place(ex, ey)
     }
     for (const prop of this.props) {
       placeProp(this.proj, prop.mesh, prop.shape, prop.def.x, prop.def.y)
+      if (!prop.shadow) continue
+      const { tx, ty } = propOrigin(prop.shape, prop.def.x, prop.def.y)
+      prop.shadow.place(tx, ty)
     }
   }
 
@@ -597,6 +630,7 @@ export class OverworldMode implements Mode {
       prop.mesh.removeFromParent()
       prop.mesh.geometry.dispose()
       ;(prop.mesh.material as THREE.Material).dispose()
+      prop.shadow?.dispose()
     }
     this.npcs = []
     this.props = []
@@ -638,6 +672,7 @@ export class OverworldMode implements Mode {
     this.disposeEntities()
     this.player?.dispose()
     this.sprites.clear()
+    this.shadowGroup.clear()
     this.player = undefined
   }
 
@@ -820,12 +855,71 @@ export class OverworldMode implements Mode {
       facing: this.facing,
       steps: this.stepsTaken,
       pitch: `${this.proj.pitchDeg.toFixed(0)}deg`,
+      shadows: SHADOW_LABELS[this.shadowStyle],
       fov: `${this.proj.fovDeg.toFixed(1)}deg`,
     }
   }
 
   setPitch(deg: number): void { this.proj.setPitchDeg(deg) }
   get pitch(): number { return this.proj.pitchDeg }
+
+  // --- Shadows -------------------------------------------------------------
+
+  /** What the sheet says is empty inside a prop's region. */
+  private trimOf(shape: PropDef): ArtTrim {
+    return this.propTrims.get(shape.id) ?? NO_TRIM
+  }
+
+  /** Give a prop the shadow the current style asks for, replacing any it had. */
+  private dressPropShadow(slot: PropSlot): void {
+    slot.shadow?.dispose()
+    slot.shadow = Shadow.forProp(
+      this.sheet, this.tileset, slot.shape, this.trimOf(slot.shape), this.shadowStyle,
+    )
+    if (!slot.shadow) return
+    this.shadowGroup.add(slot.shadow.mesh)
+    const { tx, ty } = propOrigin(slot.shape, slot.def.x, slot.def.y)
+    slot.shadow.place(tx, ty)
+  }
+
+  /**
+   * Hang a character in the world, with the shadow the current style asks for.
+   *
+   * The sprite owns its shadow — it has to, because a cast shadow is the
+   * current walk frame's silhouette — so all the world does is put the mesh in
+   * the group that draws it under everything else.
+   */
+  private addSprite(sprite: CharacterSprite): void {
+    this.sprites.add(sprite.mesh)
+    sprite.setShadowStyle(this.shadowStyle)
+    if (sprite.shadow) this.shadowGroup.add(sprite.shadow.mesh)
+  }
+
+  /** Every character in the world, whether or not it has art. */
+  private *castingSprites(): Generator<CharacterSprite> {
+    if (this.player) yield this.player
+    for (const npc of this.npcs) if (npc.sprite) yield npc.sprite
+    for (const slot of this.events) if (slot.sprite) yield slot.sprite
+  }
+
+  get shadows(): ShadowStyle { return this.shadowStyle }
+
+  /**
+   * Swap every shadow in the world for another style. Shadows are cheap to
+   * rebuild — one quad each — so this throws them all away rather than trying
+   * to mutate material uniforms that differ in kind between styles.
+   */
+  setShadowStyle(style: ShadowStyle): void {
+    if (style === this.shadowStyle) return
+    this.shadowStyle = style
+    for (const slot of this.props) this.dressPropShadow(slot)
+    for (const sprite of this.castingSprites()) {
+      sprite.setShadowStyle(style)
+      if (sprite.shadow) this.shadowGroup.add(sprite.shadow.mesh)
+    }
+    this.placeEntities()
+  }
+
 }
 
 /**

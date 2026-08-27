@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Assets } from '../core/assets'
 import { loadAseprite, type SpriteSheet } from './aseprite'
 import { makePlaceholderTexture } from './placeholder'
+import { Shadow, type ShadowStyle } from './shadow'
 import { TILE } from '../core/config'
 
 export type Facing = 'down' | 'left' | 'right' | 'up'
@@ -66,6 +67,15 @@ export class CharacterSprite {
   private material: THREE.MeshBasicMaterial
   private uv: THREE.BufferAttribute
   private mirrored: ReadonlySet<Facing>
+  /**
+   * The character's ground shadow, when shadows are on. It lives here rather
+   * than beside the sprite in the world because it has to follow the walk
+   * cycle: a cast shadow is the current frame's silhouette, so anything that
+   * changed the frame without telling the shadow would leave a walking
+   * character with a standing shadow.
+   */
+  private shadowCast?: Shadow
+  private shadowStyle: ShadowStyle = 'none'
   /** True only for `broken`, whose texture is made here rather than by Assets. */
   private ownsTexture = false
   // Pose is part of the key: walk frame 0 and idle frame 0 are different
@@ -185,12 +195,41 @@ export class CharacterSprite {
     }
     writeFrameUv(this.uv.array as Float32Array, sheet.frames[idx]!, this.mirrored.has(facing))
     this.uv.needsUpdate = true
+    this.syncShadow(sheet)
+  }
+
+  /**
+   * Give this character a shadow, or take the one it has away.
+   *
+   * Cheap enough to throw away and rebuild — one quad — and the three styles
+   * do not share a material, so swapping is a rebuild rather than a uniform
+   * change.
+   */
+  setShadowStyle(style: ShadowStyle): void {
+    if (style === this.shadowStyle && this.shadowCast) return
+    this.shadowCast?.dispose()
+    this.shadowStyle = style
+    const [fw, fh] = this.def.frameSize
+    this.shadowCast = Shadow.forSprite(fw / TILE, fh / TILE, style)
+    this.syncShadow()
+  }
+
+  /** The mesh to hang in the world's shadow group, if there is one. */
+  get shadow(): Shadow | undefined { return this.shadowCast }
+
+  /** Hand the shadow whatever frame is on screen now. */
+  private syncShadow(sheet = this.resolve(this.current.facing, this.current.pose)): void {
+    if (!this.shadowCast || !sheet) return
+    this.shadowCast.setFrame(
+      sheet.texture, sheet.width, sheet.height, this.uv.array as Float32Array,
+    )
   }
 
   /** True if this facing is drawn by flipping its sheet. */
   isMirrored(facing: Facing): boolean { return this.mirrored.has(facing) }
 
   dispose(): void {
+    this.shadowCast?.dispose()
     this.mesh.geometry.dispose()
     // Sheet textures belong to Assets, which caches them; a placeholder made by
     // `broken` belongs to this sprite and would otherwise leak per rebuild.

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { propUv, type PropDef, type Tileset } from './tileset'
+import type { PropDef, Tileset } from './tileset'
+import { propArt, NO_TRIM, type ArtTrim } from './artBounds'
 import type { Projection } from './projection'
 
 /**
@@ -29,12 +30,22 @@ export function propOrigin(def: PropDef, x: number, y: number): { tx: number; ty
   }
 }
 
-/** One prop's quad, sized in tiles and UV'd to its region of the sheet. */
-export function buildProp(texture: THREE.Texture, tileset: Tileset, def: PropDef): THREE.Mesh {
-  const { u0, u1, v0, v1 } = propUv(tileset, def)
-  const geo = new THREE.PlaneGeometry(def.w, def.h)
+/**
+ * One prop's quad, sized in tiles and UV'd to the drawing inside its region.
+ *
+ * Sized to the drawing rather than to the region, so the quad's bottom edge is
+ * the drawing's bottom edge. A region is whole cells and nothing makes the art
+ * fill it; since a billboard stands on the bottom edge of its quad, any empty
+ * strip below the art is exactly how far the prop would float. See `propArt`
+ * for why this is a smaller quad and not a shifted one.
+ */
+export function buildProp(
+  texture: THREE.Texture, tileset: Tileset, def: PropDef, trim: ArtTrim = NO_TRIM,
+): THREE.Mesh {
+  const { w, h, u0, u1, v0, v1 } = propArt(tileset, def, trim)
+  const geo = new THREE.PlaneGeometry(w, h)
   // Origin at the bottom edge, which is what placeBillboard rotates about.
-  geo.translate(0, def.h / 2, 0)
+  geo.translate(0, h / 2, 0)
   const uv = geo.getAttribute('uv')
   // PlaneGeometry's vertices run top-left, top-right, bottom-left, bottom-right.
   uv.setXY(0, u0, v1)
