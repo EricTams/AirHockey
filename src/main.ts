@@ -2,6 +2,7 @@ import { Renderer } from './core/renderer'
 import { Input } from './core/input'
 import { ModeManager, nextDebugMode } from './core/mode'
 import { Loop } from './core/loop'
+import { FailureBanner } from './core/failureBanner'
 import { Assets } from './core/assets'
 import { DebugOverlay } from './core/debugOverlay'
 import { GameState } from './world/gameState'
@@ -55,6 +56,8 @@ const tick = (dt: number) => {
   input.endTick()
 }
 
+const banner = new FailureBanner()
+
 const loop = new Loop(
   tick,
   () => {
@@ -68,11 +71,13 @@ const loop = new Loop(
       ...(modes.activeName === 'overworld' ? overworld.status : {}),
       ...(modes.activeName === 'battle' ? battle.status : {}),
       stubbed: assets.placeholders.length,
+      contained: loop.failureCount,
       geometries: gfx.gl.info.memory.geometries,
       textures: gfx.gl.info.memory.textures,
       keys: 'WASD/mouse move  Z talk  M mode  [ ] pitch  F1 overlay',
     })
   },
+  (failure) => banner.show(failure),
 )
 loop.start()
 
@@ -134,6 +139,10 @@ const editor = mountEditorUi({
     // is nothing to reload.
     session?.close()
     debug.setVisible(debugWasVisible)
+    // Resuming play is the moment whatever failed may have just been fixed, so
+    // the notice starts clear. If it has not been fixed it is back within a
+    // frame, which is the only honest way to dismiss it.
+    banner.clear()
     input.reset()   // drop anything held while the editor had focus
     loop.setPaused(false)
     console.log('[editor] resumed, playing your content')
