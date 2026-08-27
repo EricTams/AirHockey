@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { wrapMono, DialogueMode } from '../src/modes/dialogue'
+import { wrapMono, DialogueMode, parseDialogue } from '../src/modes/dialogue'
+import { brokenScript } from '../src/modes/overworld'
 
 describe('wrapMono', () => {
   it('keeps a short line intact', () => {
@@ -66,4 +67,32 @@ describe('DialogueMode entered with no script', () => {
   // The non-empty path is not asserted here: building a box needs the runtime
   // bitmap font, which needs a canvas, and the suite runs in node. It is
   // covered by playing a conversation in the browser.
+})
+
+/**
+ * What a designer sees when they mistype a path in the entity editor.
+ *
+ * Every one of these references is hand-typed, so a typo is routine rather
+ * than corruption. Silence is the one answer they cannot act on: an NPC with a
+ * broken dialogue file behaves exactly like an NPC that never had one, and
+ * like standing on the wrong tile.
+ */
+describe('brokenScript', () => {
+  it('names the path that failed', () => {
+    const s = brokenScript({ id: 'wing', dialogue: 'data/dialogue/plummer.json' })
+    expect(s.lines[0]!.text).toContain('data/dialogue/plummer.json')
+    expect(s.lines[0]!.name).toBe('wing')
+  })
+
+  it('is a valid script, so the box opens and can be advanced past', () => {
+    // The whole point is that it behaves like an ordinary conversation: if it
+    // did not parse, the player would be back in an empty dialogue.
+    const s = brokenScript({ id: 'wing', dialogue: 'nope.json' })
+    expect(() => parseDialogue(s, 'broken')).not.toThrow()
+    expect(s.lines).toHaveLength(1)
+  })
+
+  it('does not collide with a real script id', () => {
+    expect(brokenScript({ id: 'wing', dialogue: 'x' }).id).toBe('broken:wing')
+  })
 })

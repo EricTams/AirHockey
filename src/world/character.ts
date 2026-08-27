@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { Assets } from '../core/assets'
 import { loadAseprite, type SpriteSheet } from './aseprite'
+import { makePlaceholderTexture } from './placeholder'
 import { TILE } from '../core/config'
 
 export type Facing = 'down' | 'left' | 'right' | 'up'
@@ -65,6 +66,8 @@ export class CharacterSprite {
   private material: THREE.MeshBasicMaterial
   private uv: THREE.BufferAttribute
   private mirrored: ReadonlySet<Facing>
+  /** True only for `broken`, whose texture is made here rather than by Assets. */
+  private ownsTexture = false
   // Pose is part of the key: walk frame 0 and idle frame 0 are different
   // pictures, so a change of pose alone still has to rewrite the UVs.
   private current: { facing: Facing; frame: number; pose: Pose } =
@@ -92,6 +95,36 @@ export class CharacterSprite {
     if (def.idle) await sprite.loadPose('idle', def.idle, assets)
     if (sprite.poses.walk.size === 0) throw new Error(`character ${def.id}: no direction sheets`)
     sprite.setFrame('down', def.idleFrame)
+    return sprite
+  }
+
+  /**
+   * A stand-in for a character whose definition could not be loaded at all.
+   *
+   * `Assets` already substitutes a labelled square for a texture that fails,
+   * but that only covers a sheet that is missing; it cannot help when the
+   * character JSON itself is a typo, because there is then nothing saying what
+   * size the sprite is or how many frames it has. This is the same idea one
+   * level up: the entity stands on its tile as a labelled box, so a designer
+   * sees which NPC is broken and where, instead of losing the map.
+   *
+   * Built without touching the network, because the reason we are here is that
+   * the network answer was no.
+   */
+  static broken(def: Pick<CharacterDef, 'id'>, label: string): CharacterSprite {
+    const [w, h] = [TILE, TILE * 2]
+    const sprite = new CharacterSprite({
+      id: def.id, frameSize: [w, h], idleFrame: 0, framesPerStep: 1, directions: {},
+    })
+    const texture = makePlaceholderTexture({ width: w, height: h, label, kind: 'character' })
+    const sheet: SpriteSheet = {
+      texture,
+      frames: [{ x: 0, y: 0, w, h, durationMs: 100, u0: 0, u1: 1, v0: 0, v1: 1 }],
+      width: w, height: h, totalMs: 100,
+    }
+    for (const facing of FACINGS) sprite.poses.walk.set(facing, sheet)
+    sprite.ownsTexture = true
+    sprite.setFrame('down', 0)
     return sprite
   }
 
@@ -159,6 +192,9 @@ export class CharacterSprite {
 
   dispose(): void {
     this.mesh.geometry.dispose()
+    // Sheet textures belong to Assets, which caches them; a placeholder made by
+    // `broken` belongs to this sprite and would otherwise leak per rebuild.
+    if (this.ownsTexture) this.material.map?.dispose()
     this.material.dispose()
   }
 }

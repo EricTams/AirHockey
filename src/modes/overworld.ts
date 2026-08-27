@@ -197,8 +197,15 @@ export class OverworldMode implements Mode {
     this.stepFrames = 0
     this.turnGrace = 0
 
-    const def = await fetchJson<CharacterDef>(PLAYER_CHARACTER)
-    this.player = await CharacterSprite.load(def, this.assets)
+    try {
+      const def = await fetchJson<CharacterDef>(PLAYER_CHARACTER)
+      this.player = await CharacterSprite.load(def, this.assets)
+    } catch (err) {
+      // Losing the player is the one gap that would otherwise leave nothing to
+      // move, so it degrades too rather than aborting the map.
+      this.noteBroken(PLAYER_CHARACTER, err)
+      this.player = CharacterSprite.broken({ id: 'player' }, 'PLAYER?')
+    }
     this.player.setFrame(this.facing, this.player.def.idleFrame)
     this.sprites.add(this.player.mesh)
 
@@ -210,6 +217,54 @@ export class OverworldMode implements Mode {
   }
 
   /**
+   * Load one NPC, containing any failure to that NPC.
+   *
+   * Every path here is one a designer types into the entity editor, so a typo
+   * is a normal occurrence rather than a corrupt file. Loading them together
+   * under one `Promise.all` meant a single bad path rejected the whole rebuild
+   * and the map vanished — the worst possible answer, because it hides which
+   * field was wrong and takes the other nineteen entities with it.
+   *
+   * Each reference is caught on its own: a broken sprite still stands on its
+   * tile as a labelled box, and a broken dialogue or battle leaves the NPC
+   * there to be fixed rather than removing them. `brokenRefs` is what makes the
+   * count visible in the debug readout.
+   */
+  private async loadNpc(slot: NpcSlot): Promise<void> {
+    try {
+      const npcDef = await fetchJson<CharacterDef>(slot.def.character)
+      slot.sprite = await CharacterSprite.load(npcDef, this.assets)
+      if (slot.def.tint !== undefined) slot.sprite.setTint(slot.def.tint)
+      slot.sprite.setFrame(slot.facing, 0)
+    } catch (err) {
+      this.noteBroken(slot.def.character, err)
+      slot.sprite = CharacterSprite.broken(slot.def, `NPC? ${slot.def.id}`)
+    }
+    this.sprites.add(slot.sprite.mesh)
+
+    if (slot.def.dialogue) {
+      try {
+        slot.script = parseDialogue(await fetchJson(slot.def.dialogue), slot.def.dialogue)
+      } catch (err) { this.noteBroken(slot.def.dialogue, err) }
+    }
+    if (slot.def.battle) {
+      try {
+        slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
+      } catch (err) { this.noteBroken(slot.def.battle, err) }
+    }
+  }
+
+  /** Content paths that failed to load, reported in the debug readout. */
+  private brokenRefs = new Set<string>()
+
+  private noteBroken(path: string, err: unknown): void {
+    if (!this.brokenRefs.has(path)) {
+      console.warn(`[world] broken reference ${path} — ${(err as Error).message}`)
+    }
+    this.brokenRefs.add(path)
+  }
+
+  /**
    * Rebuild the NPCs and props from the map's arrays, which the editor edits in
    * place. Everything is loaded again rather than diffed: an NPC's sprite,
    * dialogue and battle all hang off fields the editor can change, and a
@@ -217,20 +272,11 @@ export class OverworldMode implements Mode {
    */
   async rebuildEntities(): Promise<void> {
     this.disposeEntities()
+    this.brokenRefs.clear()
     const map = this.map
 
     this.npcs = map.npcs.map((n) => ({ def: n, tile: [n.x, n.y], facing: n.facing }))
-    const npcs = Promise.all(this.npcs.map(async (slot) => {
-      const npcDef = await fetchJson<CharacterDef>(slot.def.character)
-      slot.sprite = await CharacterSprite.load(npcDef, this.assets)
-      if (slot.def.tint !== undefined) slot.sprite.setTint(slot.def.tint)
-      slot.sprite.setFrame(slot.facing, 0)
-      this.sprites.add(slot.sprite.mesh)
-      if (slot.def.dialogue) {
-        slot.script = parseDialogue(await fetchJson(slot.def.dialogue), slot.def.dialogue)
-      }
-      if (slot.def.battle) slot.battle = await fetchJson<BattleConfig>(slot.def.battle)
-    }))
+    const npcs = Promise.all(this.npcs.map((slot) => this.loadNpc(slot)))
 
     this.events = map.events.map((def): EventSlot => ({
       def,
@@ -643,7 +689,12 @@ export class OverworldMode implements Mode {
     if (this.tryTalkEvent(fx, fy)) return true
 
     const npc = this.npcs.find((n) => n.tile[0] === fx && n.tile[1] === fy)
-    if (!npc?.script) return false
+    if (!npc) return false
+    // An NPC whose dialogue file is broken still answers, and says so. Silence
+    // is the one response a designer cannot act on: it looks identical to an
+    // NPC that was never given dialogue, and to standing on the wrong tile.
+    const script = npc.script ?? (npc.def.dialogue ? brokenScript(npc.def) : undefined)
+    if (!script) return false
 
     // Turn the NPC to face the player before speaking.
     const opposite: Record<Facing, Facing> = { up: 'down', down: 'up', left: 'right', right: 'left' }
@@ -651,7 +702,7 @@ export class OverworldMode implements Mode {
     npc.sprite?.setFrame(npc.facing, 0)
 
     this.onSwitch?.('dialogue', {
-      script: npc.script,
+      script,
       // Doc §7.3: a battle-flagged NPC starts its battle when dialogue ends.
       next: npc.battle
         ? { mode: 'battle', payload: { config: npc.battle, returnTo: 'overworld' } }
@@ -764,6 +815,7 @@ export class OverworldMode implements Mode {
       tileset: this.tileset
         ? `${this.tileset.id} ${this.tileset.cols}x${this.tileset.rows} — ${describeTileset(this.tileset)}`
         : '<none>',
+      broken: this.brokenRefs.size,
       tile: `${this.tx},${this.ty}`,
       facing: this.facing,
       steps: this.stepsTaken,
@@ -774,4 +826,16 @@ export class OverworldMode implements Mode {
 
   setPitch(deg: number): void { this.proj.setPitchDeg(deg) }
   get pitch(): number { return this.proj.pitchDeg }
+}
+
+/**
+ * What a broken NPC says. Shown in the ordinary dialogue box, in the same
+ * spirit as the labelled art placeholders: the gap is visible where the
+ * designer is already looking, rather than in a console they may not have open.
+ */
+export function brokenScript(npc: { id: string; dialogue?: string }): DialogueScript {
+  return {
+    id: `broken:${npc.id}`,
+    lines: [{ name: npc.id, text: `Broken dialogue reference: ${npc.dialogue}` }],
+  }
 }
