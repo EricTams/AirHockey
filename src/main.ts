@@ -27,8 +27,8 @@ const state = new GameState()
 const overworld = new OverworldMode(gfx, input, assets, state)
 await overworld.init()
 
-// Which shadow style to keep is still an open question; the button flips
-// between them against real art rather than against a screenshot.
+// The world picks the default; the button is here to compare the styles
+// against real art rather than against a screenshot.
 const shadowToggle = new ShadowToggle((style) => overworld.setShadowStyle(style), overworld.shadows)
 
 // Dialogue draws over a frozen overworld (doc §7.2), so it renders it directly.

@@ -90,7 +90,12 @@ export class OverworldMode implements Mode {
    * on.
    */
   private shadowGroup = new THREE.Group()
-  private shadowStyle: ShadowStyle = 'blob'
+  /**
+   * The style the world boots into. Soft is the one that reads as light on the
+   * ground rather than as a decal under a sprite; the toggle is there to argue
+   * with that against real art, not because the choice is still open.
+   */
+  private shadowStyle: ShadowStyle = 'soft'
   private player?: CharacterSprite
 
   private map!: GameMap
