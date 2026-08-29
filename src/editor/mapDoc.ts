@@ -42,6 +42,7 @@ export interface CellEdit {
 export interface MapState {
   id: string
   tileset: string
+  hour: GameMap['hour']
   playerStart: GameMap['playerStart']
   npcs: MapNpc[]
   props: MapProp[]
@@ -83,6 +84,8 @@ export interface Touched {
   layers: LayerName[]
   collision: boolean
   entities: boolean
+  /** The hour changed, so the light and every shadow have to be cast again. */
+  light: boolean
   /**
    * The map now points at a different tileset, so every tile index in it means
    * something else and the whole world has to be built again. Rebuilding the
@@ -91,7 +94,8 @@ export interface Touched {
   world: boolean
 }
 
-const NOTHING: Touched = { layers: [], collision: false, entities: false, world: false }
+const NOTHING: Touched =
+  { layers: [], collision: false, entities: false, light: false, world: false }
 
 export class MapDoc {
   private undoStack: Stroke[] = []
@@ -172,7 +176,7 @@ export class MapDoc {
     if (JSON.stringify(from) === JSON.stringify(to)) return NOTHING
     this.undoStack.push({ label, edits: [{ kind: 'state', from, to }] })
     this.redoStack = []
-    return { layers: [], collision: false, entities: true, world: from.tileset !== to.tileset }
+    return stateTouched(from, to)
   }
 
   /**
@@ -187,7 +191,7 @@ export class MapDoc {
     restoreShape(this.map, next)
     this.undoStack.push({ label, edits: [{ kind: 'shape', from, to: cloneMap(next) }] })
     this.redoStack = []
-    return { layers: [...LAYER_NAMES], collision: true, entities: true, world: true }
+    return { layers: [...LAYER_NAMES], collision: true, entities: true, light: true, world: true }
   }
 
   /** Close the stroke and report what it touched. An empty stroke is dropped. */
@@ -271,6 +275,7 @@ function restoreShape(map: GameMap, next: GameMap): void {
   restoreState(map, {
     id: next.id,
     tileset: next.tileset,
+    hour: next.hour,
     playerStart: next.playerStart,
     npcs: next.npcs,
     props: next.props,
@@ -283,6 +288,7 @@ function snapshotState(map: GameMap): MapState {
   return {
     id: map.id,
     tileset: map.tileset,
+    hour: map.hour,
     playerStart: { ...map.playerStart },
     npcs: map.npcs.map((n) => ({ ...n })),
     props: map.props.map((p) => ({ ...p })),
@@ -297,6 +303,7 @@ function snapshotState(map: GameMap): MapState {
 function restoreState(map: GameMap, state: MapState): void {
   map.id = state.id
   map.tileset = state.tileset
+  map.hour = state.hour
   map.playerStart = { ...state.playerStart }
   map.npcs.splice(0, map.npcs.length, ...state.npcs.map((n) => ({ ...n })))
   map.props.splice(0, map.props.length, ...state.props.map((p) => ({ ...p })))
@@ -304,24 +311,47 @@ function restoreState(map: GameMap, state: MapState): void {
   map.events.splice(0, map.events.length, ...structuredClone(state.events))
 }
 
+/**
+ * What a change to the map's state means for the scene.
+ *
+ * The hour is called out on its own rather than folded into `entities`: it is
+ * the only state field that touches no entity at all, and rebuilding every
+ * sprite in the world to move the sun would re-fetch their sheets to draw the
+ * same characters back in the same places.
+ */
+function stateTouched(from: MapState, to: MapState): Touched {
+  const bar = (state: MapState) => JSON.stringify({ ...state, hour: 0 })
+  return {
+    layers: [],
+    collision: false,
+    entities: bar(from) !== bar(to),
+    light: from.hour !== to.hour,
+    world: from.tileset !== to.tileset,
+  }
+}
+
 function touchedBy(stroke: Stroke): Touched {
   const layers = new Set<LayerName>()
   let collision = false
   let entities = false
+  let light = false
   let world = false
   for (const edit of stroke.edits) {
     if (edit.kind === 'shape') {
       for (const name of LAYER_NAMES) layers.add(name)
       collision = true
       entities = true
+      light = true
       world = true
     } else if (edit.kind === 'state') {
-      entities = true
-      world ||= edit.from.tileset !== edit.to.tileset
+      const t = stateTouched(edit.from, edit.to)
+      entities ||= t.entities
+      light ||= t.light
+      world ||= t.world
     } else if (edit.target === COLLISION) collision = true
     else layers.add(edit.target)
   }
-  return { layers: LAYER_NAMES.filter((n) => layers.has(n)), collision, entities, world }
+  return { layers: LAYER_NAMES.filter((n) => layers.has(n)), collision, entities, light, world }
 }
 
 /** Merge two touched sets, for callers applying several actions at once. */
@@ -331,13 +361,14 @@ export function mergeTouched(a: Touched, b: Touched): Touched {
     layers: LAYER_NAMES.filter((n) => layers.has(n)),
     collision: a.collision || b.collision,
     entities: a.entities || b.entities,
+    light: a.light || b.light,
     world: a.world || b.world,
   }
 }
 
 /** True if a stroke changed nothing worth rebuilding for. */
 export function isNothing(t: Touched): boolean {
-  return t.layers.length === 0 && !t.collision && !t.entities && !t.world
+  return t.layers.length === 0 && !t.collision && !t.entities && !t.light && !t.world
 }
 
 /**

@@ -14,7 +14,7 @@ import { EditorOverlay } from './overlay'
 import { serializeMap } from './mapFile'
 import { bundleChanges, saveBundle } from './handoff'
 import { EDITOR_CSS, DOCK_PX } from './editorCss'
-import { el, checkbox } from './dom'
+import { el, checkbox, slider } from './dom'
 import { DialogueEditor } from './dialogueEditor'
 import { EntityEditor } from './entityEditor'
 import { TilesetEditor } from './tilesetEditor'
@@ -24,6 +24,7 @@ import type { ModeManager } from '../core/mode'
 import type { DialogueMode } from '../modes/dialogue'
 import type { GameState } from '../world/gameState'
 import { TILE, VIRTUAL_W, VIRTUAL_H } from '../core/config'
+import { DEFAULT_HOUR, HOURS, hourLabel } from '../world/daylight'
 import type { Tileset } from '../world/tileset'
 
 /**
@@ -125,6 +126,7 @@ export class Editor {
     docFoot: HTMLElement
     gridCheck: HTMLInputElement
     collisionCheck: HTMLInputElement
+    hour: { input: HTMLInputElement; set: (v: number) => void }
     cellText: HTMLElement
     tileText: HTMLElement
     zoomText: HTMLElement
@@ -165,7 +167,7 @@ export class Editor {
     this.doc = new MapDoc(overworld.currentMapPath, map)
 
     this.overlay = new EditorOverlay()
-    overworld.worldScene.add(this.overlay.group)
+    overworld.overlayScene.add(this.overlay.group)
     this.overlay.setMap(map)
 
     const sheet = await assets.texture(tileset.image)
@@ -515,6 +517,7 @@ export class Editor {
         layers: layersOf(this.target),
         collision: this.target === COLLISION,
         entities: false,
+        light: false,
         world: false,
       })
     }
@@ -543,6 +546,7 @@ export class Editor {
     }
     if (touched.layers.length > 0) this.host.overworld.rebuildLayers(touched.layers)
     if (touched.collision) this.overlay?.setCollision(this.doc!.map)
+    if (touched.light) this.host.overworld.setHour(this.doc!.map.hour ?? DEFAULT_HOUR)
     if (touched.entities) {
       // Reloads character definitions and dialogue, so it cannot be awaited
       // from a pointer handler. Failures land in the status bar.
@@ -941,6 +945,20 @@ export class Editor {
     const coll = checkbox('Collision (V)', false, (on) => this.overlay?.setCollisionVisible(on))
     mapPane.append(el('div', { class: 'ed-sec' }, el('label', {}, 'Layer'), targetRow, grid.row, coll.row))
 
+    // Time of day is a property of the map rather than of the brush, but this
+    // is where the designer is standing when they look at the world, so this is
+    // where the dial goes.
+    const hour = slider(
+      0, HOURS - 1, this.doc!.map.hour ?? DEFAULT_HOUR, hourLabel,
+      // Scrubbing shows the hour without writing it down: the world is a
+      // rebuild away, the document is not touched, and letting go is what
+      // commits. Nothing ticks while the editor is open, so this has to reach
+      // the world itself.
+      (h) => this.host.overworld.setHour(h),
+      (h) => this.commitHour(h),
+    )
+    mapPane.append(el('div', { class: 'ed-sec' }, el('label', {}, 'Time of day'), hour.row))
+
     const palWrap = el('div', { class: 'ed-pal-wrap' }, this.palette!.canvas)
     mapPane.append(palWrap)
 
@@ -977,6 +995,7 @@ export class Editor {
       style, dock, bar, tabs, mapPane, docFoot,
       tools, targets, erase, save, undo, redo, download, dot,
       gridCheck: grid.input, collisionCheck: coll.input,
+      hour,
       cellText, tileText, zoomText, message,
     }
 
@@ -1008,6 +1027,24 @@ export class Editor {
     // follow, or it claims the thing on screen is off.
     dom.gridCheck.checked = this.overlay?.isGridVisible ?? true
     dom.collisionCheck.checked = this.overlay?.isCollisionVisible ?? false
+    // Undo, redo and opening another map all move the hour without touching the
+    // slider, so the slider follows the document rather than the other way.
+    dom.hour.set(doc.map.hour ?? DEFAULT_HOUR)
+  }
+
+  /**
+   * Write the scrubbed hour into the map, as one undoable action.
+   *
+   * The world is already showing it — `onScrub` put it there — so this is the
+   * document catching up, which is also what makes the map dirty and the hour
+   * something that survives a save.
+   */
+  private commitHour(hour: number): void {
+    const doc = this.doc
+    if (!doc) return
+    const touched = doc.editMap('time of day', (map) => { map.hour = hour })
+    if (!isNothing(touched)) this.refresh(touched)
+    this.syncButtons()
   }
 
   private updateStatus(): void {

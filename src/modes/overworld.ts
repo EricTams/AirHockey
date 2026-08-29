@@ -19,6 +19,9 @@ import { buildProp, placeProp, propOrigin } from '../world/prop'
 import { DEFAULT_SHADOW_STYLE, Shadow, SHADOW_LABELS, type ShadowStyle } from '../world/shadow'
 import { measurePropTrims, NO_TRIM, type ArtTrim } from '../world/artBounds'
 import { Backdrop } from '../world/backdrop'
+import {
+  daylightAt, DaylightPass, DEFAULT_HOUR, hourLabel, normalizeHour, type Daylight,
+} from '../world/daylight'
 import { fetchJson } from '../core/paths'
 import { parseDialogue, type DialogueScript } from './dialogue'
 import type { BattleConfig } from './battle/physics'
@@ -81,6 +84,13 @@ export class OverworldMode implements Mode {
   private scene = new THREE.Scene()
   private proj = new Projection()
   private backdrop = new Backdrop()
+  /**
+   * The editor's own geometry — grid, border, collision mask, tool cursor — in
+   * a scene of its own so it can be drawn AFTER the light. Tinted along with
+   * the world it would go blue at midnight, and the collision mask is the one
+   * thing on screen that has to stay readable at every hour.
+   */
+  private overlays = new THREE.Scene()
   private sprites = new THREE.Group()
   /**
    * Shadows sit in their own group so one group order puts every one of them
@@ -96,6 +106,16 @@ export class OverworldMode implements Mode {
    * with that against real art, not because the choice is still open.
    */
   private shadowStyle: ShadowStyle = DEFAULT_SHADOW_STYLE
+  /**
+   * What hour the world is drawn at. A property of the map, so walking through
+   * a warp can walk you from noon into dusk; `DEFAULT_HOUR` until a map says
+   * otherwise. Held as the resolved `Daylight` as well as the number, because
+   * every shadow in the world is built from it and identity is what tells a
+   * sprite its shadow is still current.
+   */
+  private hourOfDay = DEFAULT_HOUR
+  private day: Daylight = daylightAt(DEFAULT_HOUR)
+  private daylight = new DaylightPass(daylightAt(DEFAULT_HOUR).light)
   private player?: CharacterSprite
 
   private map!: GameMap
@@ -203,6 +223,9 @@ export class OverworldMode implements Mode {
     this.disposeScene()
     this.map = map
     this.tileset = tileset
+    // Before anything below builds a shadow: the sun it is cast by comes from
+    // the map's own hour.
+    this.applyHour(map.hour ?? DEFAULT_HOUR)
 
     this.sheet = await this.assets.texture(tileset.image, {
       label: 'TILESET', kind: 'tile', width: tileset.sheetW, height: tileset.sheetH,
@@ -685,8 +708,11 @@ export class OverworldMode implements Mode {
   get currentMap(): GameMap { return this.map }
   /** The tileset its indices refer to. */
   get currentTileset(): Tileset { return this.tileset }
-  /** For the editor's own overlay geometry. */
-  get worldScene(): THREE.Scene { return this.scene }
+  /**
+   * For the editor's own overlay geometry. Its own scene, drawn after the
+   * light: the grid and the collision mask are there to be read, not lit.
+   */
+  get overlayScene(): THREE.Scene { return this.overlays }
   /** For the editor's camera control; nothing drives it while paused. */
   get projection(): Projection { return this.proj }
 
@@ -853,6 +879,10 @@ export class OverworldMode implements Mode {
     // Backdrop first, with depth writes off, so the world composites over it.
     this.backdrop.render(this.gfx.gl)
     this.gfx.gl.render(this.scene, this.proj.camera)
+    // The hour, over everything the world drew — sky included.
+    this.daylight.render(this.gfx.gl)
+    // The editor's chrome sits on top of the light rather than under it.
+    this.gfx.gl.render(this.overlays, this.proj.camera)
   }
 
   /** Debug readout for the overlay. */
@@ -869,6 +899,7 @@ export class OverworldMode implements Mode {
       facing: this.facing,
       steps: this.stepsTaken,
       pitch: `${this.proj.pitchDeg.toFixed(0)}deg`,
+      hour: hourLabel(this.hourOfDay),
       shadows: SHADOW_LABELS[this.shadowStyle],
       fov: `${this.proj.fovDeg.toFixed(1)}deg`,
     }
@@ -889,6 +920,7 @@ export class OverworldMode implements Mode {
     slot.shadow?.dispose()
     slot.shadow = Shadow.forProp(
       this.sheet, this.tileset, slot.shape, this.trimOf(slot.shape), this.shadowStyle,
+      this.day,
     )
     if (!slot.shadow) return
     this.shadowGroup.add(slot.shadow.object)
@@ -905,7 +937,7 @@ export class OverworldMode implements Mode {
    */
   private addSprite(sprite: CharacterSprite): void {
     this.sprites.add(sprite.mesh)
-    sprite.setShadowStyle(this.shadowStyle)
+    sprite.setShadowStyle(this.shadowStyle, this.day)
     if (sprite.shadow) this.shadowGroup.add(sprite.shadow.object)
   }
 
@@ -926,9 +958,42 @@ export class OverworldMode implements Mode {
   setShadowStyle(style: ShadowStyle): void {
     if (style === this.shadowStyle) return
     this.shadowStyle = style
+    this.rebuildShadows()
+  }
+
+  // --- Time of day ---------------------------------------------------------
+
+  get hour(): number { return this.hourOfDay }
+
+  /**
+   * Move the world to another hour.
+   *
+   * Applies immediately rather than waiting on a tick: edit mode pauses the
+   * loop, and the slider that drives this is on the other side of that pause.
+   */
+  setHour(hour: number): void {
+    const h = normalizeHour(hour)
+    if (h === this.hourOfDay) return
+    this.applyHour(h)
+    this.rebuildShadows()
+  }
+
+  /** The hour, without the rebuild — for callers about to build the world anyway. */
+  private applyHour(hour: number): void {
+    this.hourOfDay = normalizeHour(hour)
+    this.day = daylightAt(this.hourOfDay)
+    this.daylight.setLight(this.day.light)
+  }
+
+  /**
+   * Cast every shadow in the world again. Both the style and the sun are baked
+   * into geometry and materials at build time, so either changing means
+   * building them all over — which is a quad each, and neither changes often.
+   */
+  private rebuildShadows(): void {
     for (const slot of this.props) this.dressPropShadow(slot)
     for (const sprite of this.castingSprites()) {
-      sprite.setShadowStyle(style)
+      sprite.setShadowStyle(this.shadowStyle, this.day)
       if (sprite.shadow) this.shadowGroup.add(sprite.shadow.object)
     }
     this.placeEntities()

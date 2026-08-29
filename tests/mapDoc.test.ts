@@ -17,7 +17,7 @@ describe('MapDoc editing', () => {
     d.beginStroke('brush')
     expect(d.set('ground', 1, 1, 7)).toBe(true)
     expect(d.get('ground', 1, 1)).toBe(7)
-    expect(d.endStroke()).toEqual({ layers: ['ground'], collision: false, entities: false, world: false })
+    expect(d.endStroke()).toEqual({ layers: ['ground'], collision: false, entities: false, light: false, world: false })
   })
 
   it('drops writes that change nothing, so undo does not fill with no-ops', () => {
@@ -90,7 +90,7 @@ describe('MapDoc editing', () => {
     const d = doc()
     d.beginStroke('collision')
     d.set(COLLISION, 0, 0, 1)
-    expect(d.endStroke()).toEqual({ layers: [], collision: true, entities: false, world: false })
+    expect(d.endStroke()).toEqual({ layers: [], collision: true, entities: false, light: false, world: false })
     expect(d.map.collision[0]).toBe(1)
   })
 
@@ -110,12 +110,35 @@ describe('MapDoc entity edits', () => {
   it('records an entity change as one undoable action', () => {
     const d = doc()
     const touched = d.editMap('place', (m) => { m.npcs.push(npc('a', 1, 1)) })
-    expect(touched).toEqual({ layers: [], collision: false, entities: true, world: false })
+    expect(touched).toEqual({ layers: [], collision: false, entities: true, light: false, world: false })
     expect(d.map.npcs).toHaveLength(1)
     d.undo()
     expect(d.map.npcs).toHaveLength(0)
     d.redo()
     expect(d.map.npcs).toHaveLength(1)
+  })
+
+  /**
+   * The hour is the one map property that touches no entity. Reporting it as an
+   * entity change would work, but it would reload every character sheet in the
+   * world on every nudge of the slider.
+   */
+  it('reports an hour change as light, not as entities', () => {
+    const d = doc()
+    const touched = d.editMap('time of day', (m) => { m.hour = 19 })
+    expect(touched.light).toBe(true)
+    expect(touched.entities).toBe(false)
+    expect(d.map.hour).toBe(19)
+  })
+
+  it('undoes an hour back to the one the map had before, including none', () => {
+    const d = doc()
+    expect(d.map.hour).toBeUndefined()
+    d.editMap('time of day', (m) => { m.hour = 3 })
+    d.undo()
+    expect(d.map.hour).toBeUndefined()
+    d.redo()
+    expect(d.map.hour).toBe(3)
   })
 
   it('drops an edit that changed nothing', () => {

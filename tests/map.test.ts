@@ -71,6 +71,8 @@ describe('parseMap', () => {
     ['duplicate NPC ids', (m) => { m.npcs.push({ ...m.npcs[0] }) }, /duplicate id "a"/],
     ['an NPC with no character', (m) => { delete m.npcs[0].character }, /missing "character"/],
     ['a missing id', (m) => { delete m.id }, /missing "id"/],
+    ['an hour off the clock', (m) => { m.hour = 24 }, /invalid hour 24/],
+    ['half past an hour', (m) => { m.hour = 6.5 }, /invalid hour 6.5/],
   ]
   for (const [what, mutate, message] of bad) {
     it(`rejects ${what}`, () => {
@@ -84,6 +86,10 @@ describe('parseMap', () => {
     const m = tinyMap()
     ;(m.layers as any).ground[3] = 999
     expect(() => parseMap(m, terrain)).toThrow(/cell 3 \(1,1\)/)
+  })
+
+  it('leaves a map with no hour of its own alone, to be drawn at the default', () => {
+    expect(parseMap(tinyMap(), terrain).hour).toBeUndefined()
   })
 
   it('allows -1 in every layer, including ground', () => {

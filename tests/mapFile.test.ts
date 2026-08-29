@@ -26,6 +26,21 @@ describe('serializeMap', () => {
     expect(groundEnd - groundStart - 1).toBe(shipped.height)
   })
 
+  /**
+   * A map authored before there were hours has no hour, and must serialise
+   * exactly as it did — which is what keeps the byte-for-byte test above
+   * meaningful once the designer starts using the slider.
+   */
+  it('omits the hour a map has never been given', () => {
+    expect(serializeMap(shipped)).not.toContain('"hour"')
+  })
+
+  it('round-trips an hour once one is set', () => {
+    const dusk = { ...shipped, hour: 18 }
+    expect(serializeMap(dusk)).toContain('  "hour": 18,')
+    expect(parseMap(JSON.parse(serializeMap(dusk)), tileset, 'dusk').hour).toBe(18)
+  })
+
   it("round-trips through the game's own validation", () => {
     const again = parseMap(JSON.parse(serializeMap(shipped)), tileset, 'again')
     expect(again).toEqual(shipped)

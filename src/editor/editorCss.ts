@@ -149,4 +149,7 @@ export const EDITOR_CSS = `
 .ed-check { display: flex; align-items: center; gap: 6px; font-size: 11px;
   color: #97a7bb; cursor: pointer; margin-top: 6px; }
 .ed-check input { accent-color: #3e6394; }
+.ed-slider { flex: 1; min-width: 0; accent-color: #3e6394; margin: 0; }
+.ed-slider-val { flex: 0 0 auto; font-size: 11px; color: #97a7bb;
+  font-variant-numeric: tabular-nums; }
 `

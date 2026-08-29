@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { PropDef, Tileset } from './tileset'
 import { propArt, type ArtTrim } from './artBounds'
+import { castOffset, type Daylight } from './daylight'
 
 /**
  * Ground shadows, in a handful of styles you can flip between.
@@ -27,8 +28,6 @@ import { propArt, type ArtTrim } from './artBounds'
  *          stacking into a hole.
  */
 
-const DEG = Math.PI / 180
-
 export type ShadowStyle = 'none' | 'blob' | 'sharp' | 'soft' | 'combo'
 
 /** Cycle order for the toggle. */
@@ -45,31 +44,17 @@ export const SHADOW_LABELS: Record<ShadowStyle, string> = {
   combo: 'blob + soft',
 }
 
-/**
- * How far the sun leans off vertical. 0 would be straight overhead and cast
- * nothing; 30 gives a shadow a little over half the caster's height, which is
- * long enough to read as a shadow and short enough not to reach the next tile
- * but one.
- */
-const SUN_TILT_DEG = 30
-
-/**
- * Compass bearing the shadow runs along, clockwise from north. 45 sends it
- * north-east, which is up and to the right on screen — where a sun sitting
- * below and to the left of the camera puts it.
- */
-const SHADOW_BEARING_DEG = 45
-
-/** Not quite black: a cool tint sits better on warm ground art than a hole. */
-const TINT = new THREE.Color(0x0b1018)
-
 /** The styles that shear a silhouette out along the sun. */
 type CastStyle = 'sharp' | 'soft'
 type CastingStyle = CastStyle | 'combo'
 
 /**
- * How dark each style draws. `combo` is the strength of its cast half; its
- * blob has its own, below, because the two are drawn on top of each other.
+ * How dark each style draws at full daylight. The hour scales this — a shadow
+ * at midnight is a hint rather than a hole — and picks its colour; see
+ * `Light` in `daylight.ts`.
+ *
+ * `combo` is the strength of its cast half; its blob has its own, below,
+ * because the two are drawn on top of each other.
  */
 const STRENGTH: Record<Exclude<ShadowStyle, 'none'>, number> = {
   blob: 0.5,
@@ -101,17 +86,6 @@ const BLOB_OF_FRAME = 0.5
  */
 const COMBO_BLOB_SCALE = 0.62
 const COMBO_BLOB_STRENGTH = 0.3
-
-/**
- * Where the top of something `h` tiles tall lands on the ground, relative to
- * its base, in tiles. The whole geometry of a cast shadow is this one vector.
- */
-export function castOffset(h: number): { dx: number; dz: number } {
-  const len = h * Math.tan(SUN_TILT_DEG * DEG)
-  const b = SHADOW_BEARING_DEG * DEG
-  // Z runs south, so a northward bearing is negative Z.
-  return { dx: len * Math.sin(b), dz: -len * Math.cos(b) }
-}
 
 /**
  * Footprint of a blob, in tiles. Wider than deep because the ground is being
@@ -231,6 +205,11 @@ type UvRect = { u0: number; u1: number; v0: number; v1: number }
  * A prop's silhouette never changes, so its shadow is built once and only ever
  * moved. A character's changes every frame of the walk, so `setFrame` re-points
  * the same quad at the frame the sprite is showing.
+ *
+ * The hour is baked in at build time — the shear is vertex positions, not a
+ * uniform — so moving the sun means throwing every shadow away and building it
+ * again. That is already how a style change works, and the hour changes about
+ * as often.
  */
 export class Shadow {
   /** What to hang in the world's shadow group. */
@@ -259,15 +238,16 @@ export class Shadow {
    */
   static forProp(
     texture: THREE.Texture, tileset: Tileset, def: PropDef, trim: ArtTrim, style: ShadowStyle,
+    day: Daylight,
   ): Shadow | undefined {
     if (style === 'none') return undefined
     const blobW = def.w * BLOB_OF_PROP
-    if (style === 'blob') return new Shadow([blobMesh(blobW, STRENGTH.blob)])
+    if (style === 'blob') return new Shadow([blobMesh(blobW, STRENGTH.blob, day)])
 
     const art = propArt(tileset, def, trim)
-    const mesh = castMesh(art.w, art.h, art, style)
+    const mesh = castMesh(art.w, art.h, art, style, day)
     mesh.name = `shadow:${style}:${def.id}`
-    const shadow = new Shadow(withComboBlob(mesh, blobW, style), mesh)
+    const shadow = new Shadow(withComboBlob(mesh, blobW, style, day), mesh)
     shadow.point(texture, tileset.sheetW, tileset.sheetH)
     return shadow
   }
@@ -277,17 +257,19 @@ export class Shadow {
    * immediately afterwards and again on every frame change — so a cast shadow
    * stays hidden until it has been given something to draw.
    */
-  static forSprite(wTiles: number, hTiles: number, style: ShadowStyle): Shadow | undefined {
+  static forSprite(
+    wTiles: number, hTiles: number, style: ShadowStyle, day: Daylight,
+  ): Shadow | undefined {
     if (style === 'none') return undefined
     const blobW = wTiles * BLOB_OF_FRAME
-    if (style === 'blob') return new Shadow([blobMesh(blobW, STRENGTH.blob)])
+    if (style === 'blob') return new Shadow([blobMesh(blobW, STRENGTH.blob, day)])
 
-    const mesh = castMesh(wTiles, hTiles, { u0: 0, u1: 1, v0: 0, v1: 1 }, style)
+    const mesh = castMesh(wTiles, hTiles, { u0: 0, u1: 1, v0: 0, v1: 1 }, style, day)
     mesh.name = `shadow:${style}:sprite`
     // Hidden until a frame arrives. A combo's blob is not: it is the same
     // pool whatever the sprite is doing, so there is nothing to wait for.
     mesh.visible = false
-    return new Shadow(withComboBlob(mesh, blobW, style), mesh)
+    return new Shadow(withComboBlob(mesh, blobW, style, day), mesh)
   }
 
   /**
@@ -340,10 +322,12 @@ export class Shadow {
 }
 
 /** The parts of a combo: its contact blob under the cast shadow it goes with. */
-function withComboBlob(cast: THREE.Mesh, widthTiles: number, style: ShadowStyle): THREE.Mesh[] {
+function withComboBlob(
+  cast: THREE.Mesh, widthTiles: number, style: ShadowStyle, day: Daylight,
+): THREE.Mesh[] {
   if (style !== 'combo') return [cast]
   // Blob first, so the cast shadow lands on top of it where they overlap.
-  return [blobMesh(widthTiles * COMBO_BLOB_SCALE, COMBO_BLOB_STRENGTH), cast]
+  return [blobMesh(widthTiles * COMBO_BLOB_SCALE, COMBO_BLOB_STRENGTH, day), cast]
 }
 
 /** One node holding both halves of a combo, so `place` moves them together. */
@@ -355,16 +339,16 @@ function group(parts: THREE.Mesh[]): THREE.Group {
 }
 
 /** A flat disc on the ground, `w` tiles across. */
-function blobMesh(widthTiles: number, strength: number): THREE.Mesh {
+function blobMesh(widthTiles: number, strength: number, day: Daylight): THREE.Mesh {
   const { w, d } = blobSize(widthTiles)
   const geo = new THREE.PlaneGeometry(w, d)
   // Flat on the ground, centred on the base edge so it pools at the foot.
   geo.rotateX(-Math.PI / 2)
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
     map: getBlobTexture(),
-    color: TINT,
+    color: day.light.shadowTint,
     transparent: true,
-    opacity: strength,
+    opacity: strength * day.light.shadow,
     depthWrite: false,
     depthTest: false,
   }))
@@ -377,10 +361,12 @@ function blobMesh(widthTiles: number, strength: number): THREE.Mesh {
  * The silhouette sheared out along the sun: a parallelogram whose base edge
  * stays at the caster's feet and whose top edge slides out by `castOffset`.
  */
-function castMesh(wTiles: number, hTiles: number, uv: UvRect, style: CastingStyle): THREE.Mesh {
+function castMesh(
+  wTiles: number, hTiles: number, uv: UvRect, style: CastingStyle, day: Daylight,
+): THREE.Mesh {
   // The combo's cast half is a soft shadow; only its strength differs.
   const look: CastStyle = style === 'combo' ? 'soft' : style
-  const { dx, dz } = castOffset(hTiles)
+  const { dx, dz } = castOffset(hTiles, day.sun)
   const hw = wTiles / 2
 
   // Same vertex order as the sprite quads — top-left, top-right, bottom-left,
@@ -407,9 +393,9 @@ function castMesh(wTiles: number, hTiles: number, uv: UvRect, style: CastingStyl
       uvMin: { value: new THREE.Vector2(Math.min(uv.u0, uv.u1), Math.min(uv.v0, uv.v1)) },
       uvMax: { value: new THREE.Vector2(Math.max(uv.u0, uv.u1), Math.max(uv.v0, uv.v1)) },
       texel: { value: new THREE.Vector2(0, 0) },
-      tint: { value: TINT.clone() },
+      tint: { value: new THREE.Color(day.light.shadowTint) },
       blur: { value: BLUR_PX[look] },
-      strength: { value: STRENGTH[style] },
+      strength: { value: STRENGTH[style] * day.light.shadow },
       tipFade: { value: TIP_FADE[look] },
       hard: { value: look === 'sharp' ? 1 : 0 },
     },

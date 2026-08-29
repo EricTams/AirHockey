@@ -68,6 +68,11 @@ export interface GameMap {
   height: number
   /** Project-relative path to the tileset descriptor JSON. */
   tileset: string
+  /**
+   * Hour of the day the map is lit at, 0-23. Optional; absent is `DEFAULT_HOUR`
+   * (see `daylight.ts`), which is plain midday.
+   */
+  hour?: number
   layers: Record<LayerName, number[]>
   /** Row-major, 1 = impassable. Separate from tiles by design (doc §6.1). */
   collision: number[]
@@ -112,6 +117,11 @@ export function parseMap(raw: unknown, tileset: Tileset, path = 'map'): GameMap 
   const area = w * h
 
   if (typeof m.tileset !== 'string' || !m.tileset) fail(path, 'missing "tileset"')
+
+  const hour = (m as { hour?: unknown }).hour
+  if (hour !== undefined && (!Number.isInteger(hour) || (hour as number) < 0 || (hour as number) > 23)) {
+    fail(path, `invalid hour ${String(hour)}, expected an integer 0..23`)
+  }
 
   const layers = m.layers
   if (!layers || typeof layers !== 'object') fail(path, 'missing "layers"')

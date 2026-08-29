@@ -23,6 +23,9 @@ export function serializeMap(map: GameMap): string {
   out.push(`  "width": ${map.width},`)
   out.push(`  "height": ${map.height},`)
   out.push(`  "tileset": ${JSON.stringify(map.tileset)},`)
+  // Omitted when the map has never been given one, so a map authored before
+  // there were hours still serialises byte for byte.
+  if (map.hour !== undefined) out.push(`  "hour": ${map.hour},`)
 
   out.push('  "layers": {')
   LAYER_NAMES.forEach((name, i) => {

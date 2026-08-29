@@ -3,6 +3,7 @@ import type { Assets } from '../core/assets'
 import { loadAseprite, type SpriteSheet } from './aseprite'
 import { makePlaceholderTexture } from './placeholder'
 import { Shadow, type ShadowStyle } from './shadow'
+import { daylightAt, DEFAULT_HOUR, type Daylight } from './daylight'
 import { TILE } from '../core/config'
 
 export type Facing = 'down' | 'left' | 'right' | 'up'
@@ -76,6 +77,8 @@ export class CharacterSprite {
    */
   private shadowCast?: Shadow
   private shadowStyle: ShadowStyle = 'none'
+  /** The hour the shadow it currently holds was cast under. */
+  private shadowDay: Daylight = daylightAt(DEFAULT_HOUR)
   /** True only for `broken`, whose texture is made here rather than by Assets. */
   private ownsTexture = false
   // Pose is part of the key: walk frame 0 and idle frame 0 are different
@@ -203,13 +206,16 @@ export class CharacterSprite {
    *
    * Cheap enough to throw away and rebuild — a quad or two — and no two styles
    * share a material, so swapping is a rebuild rather than a uniform change.
+   * The hour goes the same way: the sun is sheared into vertex positions, so
+   * moving it is a rebuild too.
    */
-  setShadowStyle(style: ShadowStyle): void {
-    if (style === this.shadowStyle && this.shadowCast) return
+  setShadowStyle(style: ShadowStyle, day: Daylight): void {
+    if (style === this.shadowStyle && day === this.shadowDay && this.shadowCast) return
     this.shadowCast?.dispose()
     this.shadowStyle = style
+    this.shadowDay = day
     const [fw, fh] = this.def.frameSize
-    this.shadowCast = Shadow.forSprite(fw / TILE, fh / TILE, style)
+    this.shadowCast = Shadow.forSprite(fw / TILE, fh / TILE, style, day)
     this.syncShadow()
   }
 
