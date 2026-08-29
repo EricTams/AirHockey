@@ -4,6 +4,18 @@
     { "name": "Blorb", "face": "assets/faces/civilian-1.png",
       "text": "You there. That paddle on your belt is not decoration, is it?" },
     { "name": "Blorb", "face": "assets/faces/civilian-1.png",
-      "text": "My table has bumpers down the middle. Learn the angles or do not bother. First to three." }
+      "text": "My table has bumpers down the middle. Learn the angles or do not bother. First to three?",
+      "choices": [
+        { "text": "You're on.", "goto": "accepted" },
+        { "text": "Not now.", "goto": "declined", "setFlag": "ducked-blorb" }
+      ] },
+    { "name": "Blorb", "face": "assets/faces/civilian-1.png",
+      "text": "Good. Bumpers are live off the break, and I do not call them for you.",
+      "label": "accepted",
+      "goto": "end" },
+    { "name": "Blorb", "face": "assets/faces/civilian-1.png",
+      "text": "Thought so. The table is not going anywhere, and neither am I.",
+      "label": "declined",
+      "goto": "stop" }
   ]
 }

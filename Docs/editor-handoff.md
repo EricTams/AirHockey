@@ -53,7 +53,7 @@ loads `public/data/maps/overworld.json`.
 | `src/editor/overlay.ts` | Grid, border, collision mask, tool cursor |
 | `src/editor/palette.ts` | The sheet drawn into a canvas, click to select |
 | `src/editor/zip.ts`, `handoff.ts` | "Download my changes" |
-| `src/editor/dialogueEditor.ts` | Line list, fields, live preview |
+| `src/editor/dialogueEditor.ts` | Line list, fields, options, live preview |
 | `src/editor/dialogueDoc.ts` | The script being edited, snapshot undo |
 | `src/editor/dialogueFile.ts` | Diffable dialogue serialisation |
 | `src/editor/entityEditor.ts` | NPC and prop placement and inspector |
@@ -96,6 +96,13 @@ same paths the game loads by, so it unzips straight over `public/`.
 speaker, portrait and text fields; live preview through the real
 `DialogueMode`, including a warning when a line wraps past the bottom of the
 box. `parseDialogue` now validates these files on load as strictly as maps.
+
+**Dialogue branches.** A line can offer the player options, jump to a labelled
+line, and set a flag the world can test later. Two ways out of a conversation,
+because they are different: ending it still starts the NPC's battle, calling it
+off does not. Format and the reasoning behind it: `Docs/dialogue.md`. The
+options are authored in the same pane as the lines and drawn in the preview by
+the real `DialogueMode`.
 
 **Entity placement works.** NPCs and props: place, drag to move, delete, and an
 inspector for every field, all undoing through the same MapDoc as the tiles.

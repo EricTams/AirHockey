@@ -46,6 +46,8 @@ export interface EntityHost {
   applyTouched(touched: Touched): void
   /** Draw the selection highlight and every entity's tile. */
   paintMarks(marks: Cell[], selected: Cell | undefined): void
+  /** Show a script in the dialogue pane. */
+  openDialogue(path: string): void
   message(text: string, tone: 'ok' | 'err'): void
 }
 
@@ -414,9 +416,27 @@ export class EntityEditor {
     facing.onchange = () => this.setNpc((n) => { n.facing = facing.value as Facing }, 'facing')
     out.push(facing)
 
+    // The path is the least interesting thing about an NPC's conversation, so
+    // sitting beside it is the way into the conversation itself: click the one
+    // who talks, then edit what they say, without going through a list of file
+    // names in another tab.
     out.push(el('label', {}, 'Dialogue'))
-    out.push(this.pathField(npc.dialogue ?? '', 'data/dialogue/', (v) =>
-      this.setNpc((n) => { if (v) n.dialogue = v; else delete n.dialogue }, 'dialogue')))
+    const jump = el('button', {
+      class: 'ed-icon', type: 'button', title: 'Edit this script',
+    }, 'Edit')
+    jump.disabled = !npc.dialogue
+    jump.onclick = () => {
+      jump.blur()
+      if (npc.dialogue) this.host.openDialogue(npc.dialogue)
+    }
+    out.push(el('div', { class: 'ed-row2' },
+      this.pathField(npc.dialogue ?? '', 'data/dialogue/', (v) => {
+        this.setNpc((n) => { if (v) n.dialogue = v; else delete n.dialogue }, 'dialogue')
+        // The inspector is not rebuilt for a field edit, so the button that
+        // depends on this field follows it here.
+        jump.disabled = !v
+      }),
+      jump))
 
     out.push(el('label', {}, 'Battle'))
     out.push(this.pathField(npc.battle ?? '', 'data/battles/', (v) =>

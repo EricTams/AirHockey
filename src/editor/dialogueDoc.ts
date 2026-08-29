@@ -1,4 +1,4 @@
-import type { DialogueLine, DialogueScript } from '../modes/dialogue'
+import type { DialogueChoice, DialogueLine, DialogueScript } from '../modes/dialogue'
 
 /**
  * A dialogue script being edited, with undo.
@@ -21,7 +21,15 @@ export interface DialogueSnapshot {
 const MAX_UNDO = 100
 
 function clone(script: DialogueScript): DialogueScript {
-  return { id: script.id, lines: script.lines.map((l) => ({ ...l })) }
+  // The choices are copied too, not shared: a snapshot that pointed at the
+  // live array would be edited along with it, and undo would restore nothing.
+  return {
+    id: script.id,
+    lines: script.lines.map((l) => ({
+      ...l,
+      ...(l.choices ? { choices: l.choices.map((c) => ({ ...c })) } : {}),
+    })),
+  }
 }
 
 export class DialogueDoc {
@@ -79,6 +87,115 @@ export class DialogueDoc {
     else delete line[field]
   }
 
+  /**
+   * Name the selected line, so other lines can jump to it.
+   *
+   * Renaming repoints every goto that named the old label. The alternative is
+   * a script that fails to save with "no line is labelled x" and a designer
+   * hunting for which option they broke by renaming something else.
+   */
+  setLabel(value: string): void {
+    const line = this.line
+    if (!line) return
+    const was = line.label
+    const now = value.trim()
+    if (was === (now || undefined)) return
+    if (now) line.label = now
+    else delete line.label
+
+    if (was) this.dropGoto(was, now)
+  }
+
+  /** Repoint every goto that named `label`, or drop it if there is no new name. */
+  private dropGoto(label: string, now = ''): void {
+    const retarget = (holder: { goto?: string }) => {
+      if (holder.goto !== label) return
+      if (now) holder.goto = now
+      else delete holder.goto
+    }
+    for (const line of this.script.lines) {
+      retarget(line)
+      for (const choice of line.choices ?? []) retarget(choice)
+    }
+  }
+
+  /** Where the conversation goes after the selected line. '' is the next one. */
+  setGoto(value: string): void {
+    const line = this.line
+    if (!line) return
+    if ((line.goto ?? '') === value) return
+    this.snapshot('line target')
+    if (value) line.goto = value
+    else delete line.goto
+  }
+
+  /**
+   * Add an option to the selected line.
+   *
+   * "Yes" and "No" rather than an empty option, because empty text fails
+   * validation: a new option has to be a valid one, or the designer's next
+   * save is refused by something they did not do on purpose.
+   */
+  addChoice(): void {
+    const line = this.line
+    if (!line) return
+    this.snapshot('add option')
+    const choices = line.choices ?? (line.choices = [])
+    choices.push({ text: choices.length === 0 ? 'Yes' : choices.length === 1 ? 'No' : 'Option' })
+  }
+
+  /** Remove one. The last one takes `choices` with it, so the line is plain again. */
+  removeChoice(index: number): void {
+    const line = this.line
+    if (!line?.choices?.[index]) return
+    this.snapshot('delete option')
+    line.choices.splice(index, 1)
+    if (line.choices.length === 0) delete line.choices
+  }
+
+  moveChoice(index: number, delta: number): boolean {
+    const choices = this.line?.choices
+    const to = index + delta
+    if (!choices || to < 0 || to >= choices.length) return false
+    this.snapshot('reorder options')
+    const [choice] = choices.splice(index, 1)
+    choices.splice(to, 0, choice!)
+    return true
+  }
+
+  /**
+   * Edit one field of one option. Text and flag names are typed, so they are
+   * not snapshotted — the same rule as the line fields above. A target picked
+   * from a list is one deliberate act, and undo should have it.
+   */
+  setChoice(index: number, patch: Partial<DialogueChoice>): void {
+    const choice = this.line?.choices?.[index]
+    if (!choice) return
+    if ('goto' in patch || 'to' in patch) this.snapshot('option target')
+    if (patch.text !== undefined) choice.text = patch.text
+    if ('goto' in patch) {
+      if (patch.goto) choice.goto = patch.goto
+      else delete choice.goto
+    }
+    if ('setFlag' in patch) {
+      if (patch.setFlag) choice.setFlag = patch.setFlag
+      else delete choice.setFlag
+    }
+    if (patch.to !== undefined) {
+      // True is the default, so the file only carries the interesting case.
+      if (patch.to) delete choice.to
+      else choice.to = false
+    }
+  }
+
+  /** Every label in the script bar the selected line's own — a jump to itself. */
+  labels(): string[] {
+    const own = this.line?.label
+    return this.script.lines
+      .map((l) => l.label)
+      .filter((l): l is string => !!l && l !== own)
+  }
+
   /** Insert a line after the selection and select it. */
   addLine(after = this.selected): number {
     this.snapshot('add line')
@@ -98,7 +215,13 @@ export class DialogueDoc {
     const line = this.script.lines[index]
     if (!line) return
     this.snapshot('duplicate line')
-    this.script.lines.splice(index + 1, 0, { ...line })
+    // Without the copy the two lines would share one choices array and editing
+    // either would edit both; without dropping the label the script would have
+    // two lines by the same name, which fails validation on the next save.
+    const copy: DialogueLine = { ...line }
+    delete copy.label
+    if (line.choices) copy.choices = line.choices.map((c) => ({ ...c }))
+    this.script.lines.splice(index + 1, 0, copy)
     this.selected = index + 1
   }
 
@@ -109,9 +232,14 @@ export class DialogueDoc {
    */
   removeLine(index = this.selected): boolean {
     if (this.script.lines.length <= 1) return false
-    if (!this.script.lines[index]) return false
+    const going = this.script.lines[index]
+    if (!going) return false
     this.snapshot('delete line')
     this.script.lines.splice(index, 1)
+    // Anything that jumped here now falls through to the next line instead.
+    // Leaving the goto behind would make the script unsaveable, and the error
+    // would name a label rather than the line the designer just deleted.
+    if (going.label) this.dropGoto(going.label)
     this.select(Math.min(index, this.script.lines.length - 1))
     return true
   }

@@ -1,5 +1,5 @@
 import type { Facing } from './character'
-import type { DialogueLine } from '../modes/dialogue'
+import { parseLines, type DialogueLine } from '../modes/dialogue'
 
 /**
  * Events: the thing that turns a map from scenery into a game.
@@ -15,9 +15,10 @@ import type { DialogueLine } from '../modes/dialogue'
  * pages, triggers, flags, variables. The capability bar is the reference; the
  * naming is not.
  *
- * Only the type import from `modes/dialogue` crosses layers, and only for the
- * shape of a spoken line — there is no runtime dependency from `world` on
- * `modes`.
+ * The one import from `modes/dialogue` crosses layers, and only for the shape
+ * of a spoken line and the validator that goes with it: a `say` block is a run
+ * of dialogue lines, and validating it twice in two places is how the two
+ * would drift apart.
  */
 
 export type CompareOp = '=' | '!=' | '<' | '<=' | '>' | '>='
@@ -168,10 +169,10 @@ export function parseCommand(raw: unknown, at: string): Command {
 
   if ('say' in c) {
     if (!Array.isArray(c.say) || c.say.length === 0) fail(at, '"say" needs at least one line')
-    c.say.forEach((line: Record<string, unknown>, i) => {
-      if (typeof line?.text !== 'string') fail(`${at}: say[${i}]`, 'missing "text"')
-    })
-    return { say: c.say as DialogueLine[] }
+    // Through the dialogue format's own validator, so lines written here get
+    // the same labels, gotos and choices as lines written in a file — and the
+    // same refusal when a goto names a label that is not there.
+    return { say: parseLines(c.say, `${at}: say`) }
   }
   if ('script' in c) {
     if (typeof c.script !== 'string' || !c.script) fail(at, '"script" must be a path')

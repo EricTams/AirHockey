@@ -38,6 +38,8 @@ export interface EventHost {
   applyTouched(touched: Touched): void
   /** Show where the events are, and which one is selected. */
   paintMarks(marks: Cell[], selected: Cell | undefined): void
+  /** Show a script in the dialogue pane. */
+  openDialogue(path: string): void
   message(text: string, tone: 'ok' | 'err'): void
 }
 
@@ -550,7 +552,17 @@ export class EventEditor {
       })
       out.push(addLine)
     } else if ('script' in command) {
-      text('Dialogue file', command.script, (v) => set((c) => { if ('script' in c) c.script = v.trim() }))
+      const jump = el('button', { class: 'ed-second', type: 'button' }, 'Edit this script')
+      jump.disabled = !command.script
+      jump.onclick = () => {
+        jump.blur()
+        if (command.script) this.host.openDialogue(command.script)
+      }
+      text('Dialogue file', command.script, (v) => {
+        set((c) => { if ('script' in c) c.script = v.trim() })
+        jump.disabled = !v.trim()
+      })
+      out.push(jump)
     } else if ('setFlag' in command) {
       text('Flag', command.setFlag, (v) => set((c) => { if ('setFlag' in c) c.setFlag = v.trim() }))
       const to = checkbox('Set it to true', command.to, (on) =>

@@ -32,7 +32,7 @@ await overworld.init()
 const shadowToggle = new ShadowToggle((style) => overworld.setShadowStyle(style), overworld.shadows)
 
 // Dialogue draws over a frozen overworld (doc §7.2), so it renders it directly.
-const dialogue = new DialogueMode(gfx, input, assets, overworld)
+const dialogue = new DialogueMode(gfx, input, assets, overworld, state)
 const battle = new BattleMode(gfx, input, assets)
 
 const switchTo = (mode: string, payload?: unknown) => modes.switchTo(mode, payload)

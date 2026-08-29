@@ -146,6 +146,10 @@ One JSON file per map:
 
 Strictly linear: an ordered list of lines. No choices, no conditions.
 
+> Post-v1: lines can now carry `label`, `goto` and `choices`, which is how the
+> player answers back. Every one of them is optional and a script that uses none
+> is exactly the file specified here. `Docs/dialogue.md` is the reference.
+
 ### 7.2 Presentation
 
 - Dialogue renders as part of the low-res frame (a screen-space quad layer over the active scene), not as HTML: a box occupying the bottom ~30% of the 640×360 frame, portrait at left (96×96), name above the text.

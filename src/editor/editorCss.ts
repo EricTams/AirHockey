@@ -140,6 +140,12 @@ export const EDITOR_CSS = `
 .ed-bar .ed-msg { margin-left: auto; }
 .ed-bar .ed-msg[data-tone="err"] { color: #e79a9a; }
 .ed-bar .ed-msg[data-tone="ok"] { color: #8fdca8; }
+.ed-choice { padding: 8px; margin-top: 6px; border: 1px solid #222c3a; border-radius: 6px;
+  background: #0e131c; }
+.ed-choice-head { display: flex; align-items: center; gap: 4px; margin-bottom: 4px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #6d8098; }
+.ed-choice-head span { flex: 1; }
+.ed-choice .ed-row2 { margin-top: 6px; }
 .ed-check { display: flex; align-items: center; gap: 6px; font-size: 11px;
   color: #97a7bb; cursor: pointer; margin-top: 6px; }
 .ed-check input { accent-color: #3e6394; }

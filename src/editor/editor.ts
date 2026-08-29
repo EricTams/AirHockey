@@ -196,6 +196,7 @@ export class Editor {
         this.overlay?.setMarks(marks)
         this.overlay?.setCursor(selected ? [selected] : [])
       },
+      openDialogue: (path) => this.openDialogue(path),
       message: (text, tone) => this.message(text, tone),
     })
 
@@ -211,6 +212,7 @@ export class Editor {
         this.overlay?.setMarks(marks)
         this.overlay?.setCursor(selected ? [selected] : [])
       },
+      openDialogue: (path) => this.openDialogue(path),
       message: (text, tone) => this.message(text, tone),
     })
 
@@ -819,9 +821,9 @@ export class Editor {
   /**
    * Show one pane. Leaving the map pane hides the editing overlay and hands the
    * screen to whatever the new pane wants to draw — for dialogue, the game's own
-   * box over the frozen world.
+   * box over the frozen world. `script` opens that pane on one named file.
    */
-  private async setTab(tab: Tab): Promise<void> {
+  private async setTab(tab: Tab, script?: string): Promise<void> {
     this.tab = tab
     const dom = this.dom
     if (dom) {
@@ -843,7 +845,7 @@ export class Editor {
     if (tab === 'dialogue') {
       // The grid over a world that is only a backdrop for the box is noise.
       if (this.overlay) this.overlay.group.visible = false
-      await this.dialogueEditor?.activate()
+      await this.dialogueEditor?.activate(script)
     } else {
       this.host.modes.switchNow('overworld')
       if (this.overlay) this.overlay.group.visible = true
@@ -854,6 +856,15 @@ export class Editor {
       if (tab === 'events') this.eventEditor?.activate()
     }
     this.syncButtons()
+  }
+
+  /**
+   * Show one script in the dialogue pane. Wired to the Edit button beside every
+   * dialogue path, so the way from an NPC to the words they say is one click
+   * rather than a tab and a name to recognise in a list.
+   */
+  private openDialogue(path: string): void {
+    void this.setTab('dialogue', path)
   }
 
   private setTool(tool: Tool): void {

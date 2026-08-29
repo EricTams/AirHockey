@@ -693,11 +693,20 @@ export class OverworldMode implements Mode {
   /**
    * Coming back from dialogue or a battle. A suspended foreground event is owed
    * an answer, and for a battle that answer is who won — which is what makes
-   * `won:`/`lost:` branches work.
+   * `won:`/`lost:` branches work. Dialogue answers only when it was stopped.
    */
   enter(payload?: unknown): void {
-    const p = payload as { battleWon?: boolean } | undefined
-    if (this.foreground?.isSuspended) this.foreground.resume({ won: p?.battleWon })
+    const p = payload as { battleWon?: boolean; dialogueStopped?: boolean } | undefined
+    if (!this.foreground?.isSuspended) return
+    // A choice that called the conversation off calls off the event it was
+    // part of: resuming would run the battle the player just declined.
+    if (p?.dialogueStopped) {
+      this.foreground.cancel()
+      this.foreground = undefined
+      this.foregroundSlot = undefined
+      return
+    }
+    this.foreground.resume({ won: p?.battleWon })
   }
 
   exit(): void {}

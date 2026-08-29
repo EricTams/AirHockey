@@ -114,6 +114,12 @@ page that sets the flag.
 | `{ "walk": ["up", "up", "left"] }` | The event walks, one tile per direction |
 | `{ "stop": true }` | Ends the event, whatever it is inside |
 
+`say` and `script` both speak dialogue **lines**, which can offer the player
+choices and branch on the answer — see `dialogue.md`. An option can set a flag,
+which is how an answer reaches the conditions above. One thing to know before
+writing one: an option that ends the conversation lets the rest of the event
+run, and an option that calls it off cancels the event where it stands.
+
 ---
 
 ## How it runs
