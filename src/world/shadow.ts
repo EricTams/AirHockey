@@ -3,7 +3,7 @@ import type { PropDef, Tileset } from './tileset'
 import { propArt, type ArtTrim } from './artBounds'
 
 /**
- * Ground shadows, in three styles you can flip between.
+ * Ground shadows, in a handful of styles you can flip between.
  *
  * None of this is a real shadow, and at top-down pitch it cannot be. A prop or
  * a character is a billboard: at pitch 90 it already lies flat on the ground,
@@ -18,20 +18,31 @@ import { propArt, type ArtTrim } from './artBounds'
  *          black — a bright midday look that sits well with pixel art.
  *   soft   the same silhouette blurred, tightest at the contact point and
  *          spreading toward the tip, which is how a real penumbra behaves.
+ *   combo  soft, plus a small tight blob at the foot. The cast shadow carries
+ *          the shape and the blob carries the contact, which a cast shadow
+ *          alone is weakest at: its darkest point is spread over the whole
+ *          silhouette, so nothing pins the caster to the ground. The two
+ *          halves are drawn fainter than either is on its own so that where
+ *          they overlap they land near a single shadow's weight rather than
+ *          stacking into a hole.
  */
 
 const DEG = Math.PI / 180
 
-export type ShadowStyle = 'none' | 'blob' | 'sharp' | 'soft'
+export type ShadowStyle = 'none' | 'blob' | 'sharp' | 'soft' | 'combo'
 
 /** Cycle order for the toggle. */
-export const SHADOW_STYLES: readonly ShadowStyle[] = ['none', 'blob', 'sharp', 'soft']
+export const SHADOW_STYLES: readonly ShadowStyle[] = ['none', 'blob', 'sharp', 'soft', 'combo']
+
+/** What the world starts with, and what the toggle cycles away from. */
+export const DEFAULT_SHADOW_STYLE: ShadowStyle = 'soft'
 
 export const SHADOW_LABELS: Record<ShadowStyle, string> = {
   none: 'off',
   blob: 'blob',
   sharp: 'cast — sharp',
   soft: 'cast — soft',
+  combo: 'blob + soft',
 }
 
 /**
@@ -52,12 +63,19 @@ const SHADOW_BEARING_DEG = 45
 /** Not quite black: a cool tint sits better on warm ground art than a hole. */
 const TINT = new THREE.Color(0x0b1018)
 
+/** The styles that shear a silhouette out along the sun. */
 type CastStyle = 'sharp' | 'soft'
+type CastingStyle = CastStyle | 'combo'
 
+/**
+ * How dark each style draws. `combo` is the strength of its cast half; its
+ * blob has its own, below, because the two are drawn on top of each other.
+ */
 const STRENGTH: Record<Exclude<ShadowStyle, 'none'>, number> = {
   blob: 0.5,
   sharp: 0.44,
   soft: 0.5,
+  combo: 0.42,
 }
 
 /** Blur radius at the tip, in source pixels. Zero is a hard edge. */
@@ -74,6 +92,15 @@ const TIP_FADE: Record<CastStyle, number> = { sharp: 1, soft: 0.4 }
  */
 const BLOB_OF_PROP = 0.82
 const BLOB_OF_FRAME = 0.5
+
+/**
+ * The combo's blob, against the blob the same caster would get on its own.
+ * Smaller, so it reads as the dark right under the caster rather than as a
+ * second shadow beside the cast one; and fainter, so the two together at the
+ * contact point come out about as dark as one shadow.
+ */
+const COMBO_BLOB_SCALE = 0.62
+const COMBO_BLOB_STRENGTH = 0.3
 
 /**
  * Where the top of something `h` tiles tall lands on the ground, relative to
@@ -206,14 +233,23 @@ type UvRect = { u0: number; u1: number; v0: number; v1: number }
  * the same quad at the frame the sprite is showing.
  */
 export class Shadow {
+  /** What to hang in the world's shadow group. */
+  readonly object: THREE.Object3D
   private uv?: THREE.BufferAttribute
-  private material: THREE.Material
+  private cast?: THREE.Mesh
 
-  private constructor(readonly mesh: THREE.Mesh, cast: boolean) {
-    this.material = mesh.material as THREE.Material
+  /**
+   * `cast`, when there is one, must also appear in `parts`: it is the quad
+   * that follows the sheet, and the rest are drawn and forgotten.
+   */
+  private constructor(private parts: THREE.Mesh[], cast?: THREE.Mesh) {
+    // A single-part shadow hangs its own mesh in the world; only the combo
+    // pays for a group, and then it is one node for both halves to be moved by.
+    this.object = parts.length === 1 ? parts[0]! : group(parts)
+    this.cast = cast
     // Only a cast shadow tracks the sheet; a blob has UVs of its own that
     // nothing ever rewrites, and holding the attribute would invite that.
-    if (cast) this.uv = mesh.geometry.getAttribute('uv') as THREE.BufferAttribute
+    if (cast) this.uv = cast.geometry.getAttribute('uv') as THREE.BufferAttribute
   }
 
   /**
@@ -225,12 +261,13 @@ export class Shadow {
     texture: THREE.Texture, tileset: Tileset, def: PropDef, trim: ArtTrim, style: ShadowStyle,
   ): Shadow | undefined {
     if (style === 'none') return undefined
-    if (style === 'blob') return new Shadow(blobMesh(def.w * BLOB_OF_PROP), false)
+    const blobW = def.w * BLOB_OF_PROP
+    if (style === 'blob') return new Shadow([blobMesh(blobW, STRENGTH.blob)])
 
     const art = propArt(tileset, def, trim)
     const mesh = castMesh(art.w, art.h, art, style)
     mesh.name = `shadow:${style}:${def.id}`
-    const shadow = new Shadow(mesh, true)
+    const shadow = new Shadow(withComboBlob(mesh, blobW, style), mesh)
     shadow.point(texture, tileset.sheetW, tileset.sheetH)
     return shadow
   }
@@ -242,12 +279,15 @@ export class Shadow {
    */
   static forSprite(wTiles: number, hTiles: number, style: ShadowStyle): Shadow | undefined {
     if (style === 'none') return undefined
-    if (style === 'blob') return new Shadow(blobMesh(wTiles * BLOB_OF_FRAME), false)
+    const blobW = wTiles * BLOB_OF_FRAME
+    if (style === 'blob') return new Shadow([blobMesh(blobW, STRENGTH.blob)])
 
     const mesh = castMesh(wTiles, hTiles, { u0: 0, u1: 1, v0: 0, v1: 1 }, style)
     mesh.name = `shadow:${style}:sprite`
+    // Hidden until a frame arrives. A combo's blob is not: it is the same
+    // pool whatever the sprite is doing, so there is nothing to wait for.
     mesh.visible = false
-    return new Shadow(mesh, true)
+    return new Shadow(withComboBlob(mesh, blobW, style), mesh)
   }
 
   /**
@@ -263,12 +303,12 @@ export class Shadow {
     for (let i = 0; i < 8; i++) a[i] = uv[i]!
     this.uv.needsUpdate = true
     this.point(texture, sheetW, sheetH, a)
-    this.mesh.visible = true
+    this.cast!.visible = true
   }
 
   /** Give the shader its texture and the UV box the blur may not leave. */
   private point(texture: THREE.Texture, sheetW: number, sheetH: number, uv?: Float32Array): void {
-    const u = (this.material as THREE.ShaderMaterial).uniforms
+    const u = (this.cast!.material as THREE.ShaderMaterial).uniforms
     u.map!.value = texture
     u.texel!.value.set(1 / sheetW, 1 / sheetH)
     if (!uv) return
@@ -287,18 +327,35 @@ export class Shadow {
    * feet are and where the shadow starts.
    */
   place(tx: number, ty: number): void {
-    this.mesh.position.set(tx, 0, ty + 0.5)
+    this.object.position.set(tx, 0, ty + 0.5)
   }
 
   dispose(): void {
-    this.mesh.removeFromParent()
-    this.mesh.geometry.dispose()
-    this.material.dispose()
+    this.object.removeFromParent()
+    for (const part of this.parts) {
+      part.geometry.dispose()
+      ;(part.material as THREE.Material).dispose()
+    }
   }
 }
 
+/** The parts of a combo: its contact blob under the cast shadow it goes with. */
+function withComboBlob(cast: THREE.Mesh, widthTiles: number, style: ShadowStyle): THREE.Mesh[] {
+  if (style !== 'combo') return [cast]
+  // Blob first, so the cast shadow lands on top of it where they overlap.
+  return [blobMesh(widthTiles * COMBO_BLOB_SCALE, COMBO_BLOB_STRENGTH), cast]
+}
+
+/** One node holding both halves of a combo, so `place` moves them together. */
+function group(parts: THREE.Mesh[]): THREE.Group {
+  const g = new THREE.Group()
+  g.name = 'shadow:combo'
+  for (const part of parts) g.add(part)
+  return g
+}
+
 /** A flat disc on the ground, `w` tiles across. */
-function blobMesh(widthTiles: number): THREE.Mesh {
+function blobMesh(widthTiles: number, strength: number): THREE.Mesh {
   const { w, d } = blobSize(widthTiles)
   const geo = new THREE.PlaneGeometry(w, d)
   // Flat on the ground, centred on the base edge so it pools at the foot.
@@ -307,7 +364,7 @@ function blobMesh(widthTiles: number): THREE.Mesh {
     map: getBlobTexture(),
     color: TINT,
     transparent: true,
-    opacity: STRENGTH.blob,
+    opacity: strength,
     depthWrite: false,
     depthTest: false,
   }))
@@ -320,7 +377,9 @@ function blobMesh(widthTiles: number): THREE.Mesh {
  * The silhouette sheared out along the sun: a parallelogram whose base edge
  * stays at the caster's feet and whose top edge slides out by `castOffset`.
  */
-function castMesh(wTiles: number, hTiles: number, uv: UvRect, style: CastStyle): THREE.Mesh {
+function castMesh(wTiles: number, hTiles: number, uv: UvRect, style: CastingStyle): THREE.Mesh {
+  // The combo's cast half is a soft shadow; only its strength differs.
+  const look: CastStyle = style === 'combo' ? 'soft' : style
   const { dx, dz } = castOffset(hTiles)
   const hw = wTiles / 2
 
@@ -349,10 +408,10 @@ function castMesh(wTiles: number, hTiles: number, uv: UvRect, style: CastStyle):
       uvMax: { value: new THREE.Vector2(Math.max(uv.u0, uv.u1), Math.max(uv.v0, uv.v1)) },
       texel: { value: new THREE.Vector2(0, 0) },
       tint: { value: TINT.clone() },
-      blur: { value: BLUR_PX[style] },
+      blur: { value: BLUR_PX[look] },
       strength: { value: STRENGTH[style] },
-      tipFade: { value: TIP_FADE[style] },
-      hard: { value: style === 'sharp' ? 1 : 0 },
+      tipFade: { value: TIP_FADE[look] },
+      hard: { value: look === 'sharp' ? 1 : 0 },
     },
     transparent: true,
     depthWrite: false,

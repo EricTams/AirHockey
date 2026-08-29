@@ -201,9 +201,8 @@ export class CharacterSprite {
   /**
    * Give this character a shadow, or take the one it has away.
    *
-   * Cheap enough to throw away and rebuild — one quad — and the three styles
-   * do not share a material, so swapping is a rebuild rather than a uniform
-   * change.
+   * Cheap enough to throw away and rebuild — a quad or two — and no two styles
+   * share a material, so swapping is a rebuild rather than a uniform change.
    */
   setShadowStyle(style: ShadowStyle): void {
     if (style === this.shadowStyle && this.shadowCast) return

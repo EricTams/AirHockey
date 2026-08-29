@@ -13,10 +13,12 @@ export const TICK_HZ = 60
 export const TICK_DT = 1 / TICK_HZ
 
 /**
- * Overworld camera pitch in degrees. 90 = flat top-down (v1).
- * ~35 stands every billboard upright for the 2.5D look; see plan "Camera Rig".
+ * Overworld camera pitch in degrees. 90 = flat top-down (v1); ~35 stands every
+ * billboard fully upright for the 2.5D look (see plan "Camera Rig"). 45 is the
+ * middle: enough tilt to stand the art up and to show the ground shadows it
+ * casts, while the tile grid still reads as a map you can navigate.
  */
-export const CAMERA_PITCH_DEG = 90
+export const CAMERA_PITCH_DEG = 45
 
 /**
  * Field of view at full top-down. Near zero is optically orthographic: a

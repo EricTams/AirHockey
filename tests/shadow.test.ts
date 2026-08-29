@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { castOffset, blobSize, SHADOW_STYLES, SHADOW_LABELS } from '../src/world/shadow'
+import {
+  castOffset, blobSize, SHADOW_STYLES, SHADOW_LABELS, DEFAULT_SHADOW_STYLE,
+} from '../src/world/shadow'
 
 /**
  * The sun is a pair of constants, and every cast shadow in the world is the
@@ -47,5 +49,12 @@ describe('the style cycle', () => {
     expect(SHADOW_STYLES[0]).toBe('none')
     for (const style of SHADOW_STYLES) expect(SHADOW_LABELS[style]).toBeTruthy()
     expect(Object.keys(SHADOW_LABELS)).toHaveLength(SHADOW_STYLES.length)
+  })
+
+  // The world starts on the default and the toggle cycles from wherever it is,
+  // so a default outside the cycle would be a style you can leave but not reach.
+  it('includes the default the world boots with', () => {
+    expect(DEFAULT_SHADOW_STYLE).toBe('soft')
+    expect(SHADOW_STYLES).toContain(DEFAULT_SHADOW_STYLE)
   })
 })

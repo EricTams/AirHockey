@@ -16,7 +16,7 @@ import type { GameState } from '../world/gameState'
 import { EventRunner, type Request } from '../world/eventRunner'
 import { describeTileset, propById, type PropDef, type Tileset } from '../world/tileset'
 import { buildProp, placeProp, propOrigin } from '../world/prop'
-import { Shadow, SHADOW_LABELS, type ShadowStyle } from '../world/shadow'
+import { DEFAULT_SHADOW_STYLE, Shadow, SHADOW_LABELS, type ShadowStyle } from '../world/shadow'
 import { measurePropTrims, NO_TRIM, type ArtTrim } from '../world/artBounds'
 import { Backdrop } from '../world/backdrop'
 import { fetchJson } from '../core/paths'
@@ -95,7 +95,7 @@ export class OverworldMode implements Mode {
    * ground rather than as a decal under a sprite; the toggle is there to argue
    * with that against real art, not because the choice is still open.
    */
-  private shadowStyle: ShadowStyle = 'soft'
+  private shadowStyle: ShadowStyle = DEFAULT_SHADOW_STYLE
   private player?: CharacterSprite
 
   private map!: GameMap
@@ -882,7 +882,7 @@ export class OverworldMode implements Mode {
       this.sheet, this.tileset, slot.shape, this.trimOf(slot.shape), this.shadowStyle,
     )
     if (!slot.shadow) return
-    this.shadowGroup.add(slot.shadow.mesh)
+    this.shadowGroup.add(slot.shadow.object)
     const { tx, ty } = propOrigin(slot.shape, slot.def.x, slot.def.y)
     slot.shadow.place(tx, ty)
   }
@@ -897,7 +897,7 @@ export class OverworldMode implements Mode {
   private addSprite(sprite: CharacterSprite): void {
     this.sprites.add(sprite.mesh)
     sprite.setShadowStyle(this.shadowStyle)
-    if (sprite.shadow) this.shadowGroup.add(sprite.shadow.mesh)
+    if (sprite.shadow) this.shadowGroup.add(sprite.shadow.object)
   }
 
   /** Every character in the world, whether or not it has art. */
@@ -920,7 +920,7 @@ export class OverworldMode implements Mode {
     for (const slot of this.props) this.dressPropShadow(slot)
     for (const sprite of this.castingSprites()) {
       sprite.setShadowStyle(style)
-      if (sprite.shadow) this.shadowGroup.add(sprite.shadow.mesh)
+      if (sprite.shadow) this.shadowGroup.add(sprite.shadow.object)
     }
     this.placeEntities()
   }
